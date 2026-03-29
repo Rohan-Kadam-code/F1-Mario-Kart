@@ -156,7 +156,7 @@ export class MarioEffects {
           this.particles.emitSpotlight(data.cx, data.cy, 'rgba(255, 255, 0, 0.6)');
         }
         this._showDOMEffect('🍌', data.cx || 200, data.cy || 200, 'effect-banana');
-        if (this.audio) this.audio.playBanana();
+        if (this.audio) this.audio.playHehe();
         break;
 
       case EFFECT_TYPES.POKE:
@@ -164,7 +164,7 @@ export class MarioEffects {
           this.particles.emitSpotlight(data.cx, data.cy, 'rgba(255, 0, 0, 0.4)');
           this._showDOMEffect('🥊', data.cx, data.cy, 'effect-poke');
         }
-        if (this.audio) this.audio.playPoke();
+        if (this.audio) this.audio.playDishum();
         break;
 
       case EFFECT_TYPES.RED_FLAG:

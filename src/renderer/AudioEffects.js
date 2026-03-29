@@ -19,6 +19,17 @@ export class AudioEffects {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 0.3; // Default volume 30%
       this.masterGain.connect(this.ctx.destination);
+
+      // Setup continuous car engine
+      this.engineOsc = this.ctx.createOscillator();
+      this.engineGain = this.ctx.createGain();
+      this.engineOsc.type = 'sawtooth';
+      this.engineOsc.frequency.setValueAtTime(40, this.ctx.currentTime);
+      this.engineGain.gain.setValueAtTime(0, this.ctx.currentTime); // Start silent
+      
+      this.engineOsc.connect(this.engineGain);
+      this.engineGain.connect(this.masterGain);
+      this.engineOsc.start();
     } catch (e) {
       console.warn('Web Audio API not supported', e);
       this.enabled = false;
@@ -64,14 +75,17 @@ export class AudioEffects {
     setTimeout(() => this._playTone(660, 'square', 0.2, 0.5), 200); // E5
   }
 
-  /** Poke (Boxing Glove): Rubbery "boing" */
-  playPoke() {
-    this._playTone(150, 'triangle', 0.3, 0.8, 300);
+  /** Dishum Dishum: Punching sound (Boxing) */
+  playDishum() {
+    this._playTone(150, 'square', 0.15, 0.6);
+    setTimeout(() => this._playTone(120, 'square', 0.2, 0.4), 100);
   }
 
-  /** Banana Defense: Slipping whistle (descending) */
-  playBanana() {
-    this._playTone(800, 'sine', 0.4, 0.7, 200);
+  /** Hehe: Giggle sound (Banana) */
+  playHehe() {
+    this._playTone(700, 'sine', 0.05, 0.4);
+    setTimeout(() => this._playTone(850, 'sine', 0.05, 0.4), 80);
+    setTimeout(() => this._playTone(800, 'sine', 0.1, 0.4), 160);
   }
 
   /** Star Power: Classic invincibility arpeggio */
@@ -116,5 +130,18 @@ export class AudioEffects {
     gain.connect(this.masterGain);
 
     noiseSource.start();
+  }
+
+  /** Update continuous car engine pitch based on speed */
+  updateEngine(speedValue, isPlaying) {
+    if (!this.enabled || !this.ctx || !this.engineOsc) return;
+    
+    // Engine sound only follows the tracked driver or if moving
+    const targetGain = (isPlaying && speedValue > 5) ? 0.06 : 0; 
+    this.engineGain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.1);
+    
+    // Scale pitch: idle at 40Hz, high speed at ~250Hz
+    const freq = 40 + (speedValue * 0.6);
+    this.engineOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.1);
   }
 }

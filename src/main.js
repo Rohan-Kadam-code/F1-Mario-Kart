@@ -976,6 +976,12 @@ function renderLoop(timestamp) {
           // Compute angle from previous position
           const dx = canvasPos.cx - sprite.cx;
           const dy = canvasPos.cy - sprite.cy;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          // Smooth the speed value slightly to avoid jittery engine pitch
+          const newSpeed = dist * 25; // Map pixel delta to approximate KM/H
+          sprite.speed = (sprite.speed * 0.8) + (newSpeed * 0.2);
+
           const angle = (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1)
             ? Math.atan2(dy, dx) : sprite.angle;
           sprite.updatePosition(canvasPos.cx, canvasPos.cy, angle);
@@ -1073,6 +1079,16 @@ function renderLoop(timestamp) {
       state.currentRaceTime / Math.max(1, state.raceDuration),
       state.currentLap
     );
+
+    // --- Update Dynamic Audio Engine (for tracked driver) ---
+    if (state.trackedDriver) {
+      const trackedSprite = state.sprites.get(state.trackedDriver);
+      if (trackedSprite) {
+        audioController.updateEngine(trackedSprite.speed, state.isPlaying);
+      }
+    } else {
+      audioController.updateEngine(0, false);
+    }
   }
 
   // Draw welcome if no data
