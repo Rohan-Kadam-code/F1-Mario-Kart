@@ -544,6 +544,7 @@ function getPositionSnapshot(raceTimeMs) {
     result.set(driverNum, {
       position: data.position,
       gap,
+      intervalValue: interval ? (interval.gap_to_leader || interval.interval || 999) : 999,
       tireCompound: stint?.compound || '',
     });
   });
@@ -655,8 +656,8 @@ function getRaceControlAtTime(raceTimeMs) {
    Event Detection — Triggers Mario Kart effects
    ============================================ */
 function detectEvents(posSnapshot, raceTimeMs) {
-  // Use time-bucketed keys to prevent duplicate events (bucket = 5 second windows)
-  const timeBucket = Math.floor(raceTimeMs / 5000);
+  // Use time-bucketed keys to prevent duplicate events (bucket = 1 second window)
+  const timeBucket = Math.floor(raceTimeMs / 1000);
   const eventKey = (type, extra) => `${type}:${extra}:${timeBucket}`;
 
   posSnapshot.forEach((data, driverNum) => {
@@ -690,7 +691,50 @@ function detectEvents(posSnapshot, raceTimeMs) {
       }
     }
 
+    // --- Poking detection (Gap < 0.5s) ---
+    // We trigger this every 3s if they are in the 'danger zone'
+    const intervalVal = data.intervalValue || 999;
+    if (intervalVal < 0.5 && data.position > 1) {
+      const pokeBucket = Math.floor(raceTimeMs / 3000);
+      const pokeKey = `poke:${driverNum}:${pokeBucket}`;
+      if (!state.detectedEvents.has(pokeKey)) {
+        state.detectedEvents.add(pokeKey);
+        const sprite = state.sprites.get(driverNum);
+        if (sprite) {
+          marioEffects.trigger(EFFECT_TYPES.POKE, {
+              driver: sprite.abbreviation,
+              cx: sprite.cx,
+              cy: sprite.cy,
+              lap: state.currentLap
+          });
+        }
+      }
+    }
+
     state.lastPositionMap.set(driverNum, data.position);
+  });
+
+  // --- Retirement / Blue Shell detection ---
+  state.drivers.forEach(d => {
+    const num = d.driver_number;
+    const wasPresent = state.lastPositionMap.has(num);
+    const isNowMissing = wasPresent && !posSnapshot.has(num);
+    
+    // If they were active but suddenly vanished from the lead-lap telemetry, they retired
+    if (isNowMissing) {
+      const key = `retire:${num}`; // only once per driver
+      if (!state.detectedEvents.has(key)) {
+        state.detectedEvents.add(key);
+        const sprite = state.sprites.get(num);
+        marioEffects.trigger(EFFECT_TYPES.RETIREMENT, {
+          driver: sprite?.abbreviation || num,
+          sprite,
+          cx: sprite?.cx,
+          cy: sprite?.cy,
+          lap: state.currentLap
+        });
+      }
+    }
   });
 
   // --- Fastest lap detection ---

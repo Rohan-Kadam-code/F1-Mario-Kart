@@ -643,8 +643,9 @@ body {
   padding: var(--space-sm);
   border-radius: var(--radius-sm);
   margin-bottom: var(--space-xs);
-  animation: eventSlideIn 0.4s ease;
+  animation: eventSlideIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   border-left: 3px solid transparent;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
 }
 .event-item.overtake { border-left-color: var(--accent-neon); background: rgba(0, 255, 136, 0.04); }
 .event-item.pit { border-left-color: var(--accent-cyan); background: rgba(6, 182, 212, 0.04); }
@@ -654,8 +655,9 @@ body {
 .event-item.retirement { border-left-color: #666; background: rgba(100, 100, 100, 0.04); }
 
 @keyframes eventSlideIn {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translateX(40px) scale(0.8); }
+  50% { opacity: 1; transform: translateX(-10px) scale(1.05); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
 }
 
 .event-icon {
@@ -668,9 +670,12 @@ body {
   min-width: 0;
 }
 .event-text {
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: 0.82rem;
+  font-weight: 800;
   line-height: 1.4;
+  color: #fff;
+  text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 0 3px 5px rgba(0,0,0,0.8);
+  letter-spacing: 0.5px;
 }
 .event-time {
   font-family: var(--font-mono);
@@ -786,6 +791,18 @@ body {
   color: #fff;
 }
 .zoom-controls button:active {
-  transform: scale(0.92);
+  transform: scale(0.85);
   background: var(--accent-primary);
+}
+
+/* ---------- Global Screen Shake ---------- */
+.screen-shake {
+  animation: globalShake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes globalShake {
+  10%, 90% { transform: translate3d(-2px, 2px, 0) rotate(-0.5deg); }
+  20%, 80% { transform: translate3d(4px, -2px, 0) rotate(0.5deg); }
+  30%, 50%, 70% { transform: translate3d(-6px, 4px, 0) rotate(-1deg); }
+  40%, 60% { transform: translate3d(6px, -4px, 0) rotate(1deg); }
 }

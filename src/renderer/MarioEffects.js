@@ -19,6 +19,7 @@ export const EFFECT_TYPES = {
   RAIN: 'rain',
   RETIREMENT: 'retirement',
   RACE_FINISH: 'race_finish',
+  POKE: 'poke',
 };
 
 /** Mario Kart effect config per event type */
@@ -83,6 +84,12 @@ const EFFECT_CONFIG = {
     verb: 'WINS THE RACE!',
     cssClass: 'fastest-lap',
   },
+  [EFFECT_TYPES.POKE]: {
+    icon: '🥊',
+    name: 'POKE',
+    verb: 'is poking the car ahead!',
+    cssClass: 'overtake',
+  },
 };
 
 export class MarioEffects {
@@ -110,6 +117,7 @@ export class MarioEffects {
       case EFFECT_TYPES.OVERTAKE:
         if (data.cx !== undefined) {
           this.particles.emitBoost(data.cx, data.cy, data.color || '#ffcc00', 20);
+          this._showDOMEffect('🍄', data.cx, data.cy - 10, 'effect-mushroom');
         }
         break;
 
@@ -127,7 +135,9 @@ export class MarioEffects {
         }
         if (data.cx !== undefined) {
           this.particles.emitStarSparkle(data.cx, data.cy);
+          this._showDOMEffect('⭐', data.cx, data.cy - 15, 'effect-star');
         }
+        this._flashOverlay('lightning-flash');
         break;
 
       case EFFECT_TYPES.DRS:
@@ -140,8 +150,15 @@ export class MarioEffects {
         this._showDOMEffect('🍌', data.cx || 200, data.cy || 200, 'effect-banana');
         break;
 
+      case EFFECT_TYPES.POKE:
+        if (data.cx !== undefined) {
+          this._showDOMEffect('🥊', data.cx, data.cy, 'effect-poke');
+        }
+        break;
+
       case EFFECT_TYPES.RED_FLAG:
         this._flashOverlay('effect-red-shell');
+        this._triggerScreenShake();
         break;
 
       case EFFECT_TYPES.SAFETY_CAR:
@@ -164,6 +181,7 @@ export class MarioEffects {
         if (data.sprite) {
           data.sprite.isRetired = true;
         }
+        this._triggerScreenShake();
         break;
 
       case EFFECT_TYPES.RACE_FINISH:
@@ -224,6 +242,18 @@ export class MarioEffects {
     setTimeout(() => {
       if (el.parentElement) el.remove();
     }, 1000);
+  }
+
+  /** Trigger global screen shake on the map container */
+  _triggerScreenShake() {
+    const section = document.getElementById('raceSection');
+    if (section) {
+      section.classList.remove('screen-shake');
+      // Trigger reflow to restart animation
+      void section.offsetWidth; 
+      section.classList.add('screen-shake');
+      setTimeout(() => section.classList.remove('screen-shake'), 600);
+    }
   }
 
   /** Add a styled event to the event feed */
