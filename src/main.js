@@ -471,8 +471,9 @@ function buildDriverLapTimes() {
 
 function createSprites() {
   state.sprites.clear();
+  const year = state.session ? (state.session.year || 2026) : 2026;
   state.drivers.forEach(d => {
-    state.sprites.set(d.driver_number, new DriverSprite(d));
+    state.sprites.set(d.driver_number, new DriverSprite(d, year));
   });
 }
 
@@ -930,6 +931,17 @@ function renderLoop(timestamp) {
           driverNum, state.currentRaceTime, data.position, totalDrivers
         );
         const { cx, cy, angle } = trackRenderer.getPositionOnTrack(progress);
+        
+        // Calculate speed (approx km/h) for Mushroom boost heuristic
+        const dProgress = Math.abs(progress - (sprite.progress || 0));
+        if (dProgress < 0.5) { // ignore teleports/lap finishes
+          const dtSeconds = dtMs / 1000;
+          if (dtSeconds > 0) {
+            const trackLengthKm = (trackRenderer.totalLength || 5000) / 1000;
+            sprite.speed = (dProgress * trackLengthKm) / (dtSeconds / 3600);
+          }
+        }
+        
         sprite.updatePosition(cx, cy, angle);
         sprite.progress = progress;
       }
@@ -939,6 +951,17 @@ function renderLoop(timestamp) {
         sprite.starTimer--;
         if (sprite.starTimer <= 0) sprite.hasStar = false;
         else particles.emitStarSparkle(sprite.cx, sprite.cy);
+      }
+
+      // Mushroom Boost (Battery) Heuristic: High acceleration or top speeds
+      // If speed > 310km/h or sudden 10% acceleration, show Mushroom
+      const speedKmh = sprite.speed || 0;
+      const prevSpeed = sprite._prevSpeed || 0;
+      sprite.hasMushroom = speedKmh > 315 || (speedKmh > 200 && speedKmh > prevSpeed * 1.05);
+      sprite._prevSpeed = speedKmh;
+
+      if (sprite.hasMushroom && state.isPlaying) {
+        particles.emitBoost(sprite.cx, sprite.cy, sprite.teamColor, 2);
       }
     });
   }

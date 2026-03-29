@@ -43,8 +43,8 @@ export class SessionSelector {
   }
 
   _loadYears() {
-    // Available years: 2023, 2024, 2025
-    const years = [2025, 2024, 2023];
+    // Available years: 2023, 2024, 2025, 2026
+    const years = [2026, 2025, 2024, 2023];
     years.forEach(y => {
       const opt = document.createElement('option');
       opt.value = y;
