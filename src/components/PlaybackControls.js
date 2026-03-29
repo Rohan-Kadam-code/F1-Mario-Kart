@@ -12,8 +12,11 @@ export class PlaybackControls {
 
     this.onPlay = null;
     this.onPause = null;
+    this.onPause = null;
     this.onSeek = null;
     this.onSpeedChange = null;
+    this.onAudioToggle = null;
+    this.isAudioEnabled = true;
 
     this._render();
   }
@@ -32,6 +35,7 @@ export class PlaybackControls {
         <button class="speed-btn" data-speed="5">5x</button>
         <button class="speed-btn" data-speed="10">10x</button>
       </div>
+      <button class="icon-button" id="audioToggleBtn" title="Toggle Sound Effects" style="margin-left: 8px; font-size: 1.2rem;">🔊</button>
     `;
 
     this.playBtn = this.container.querySelector('#playBtn');
@@ -39,8 +43,15 @@ export class PlaybackControls {
     this.currentLapLabel = this.container.querySelector('#currentLapLabel');
     this.totalLapLabel = this.container.querySelector('#totalLapLabel');
     this.speedBtns = this.container.querySelectorAll('.speed-btn');
+    this.audioToggleBtn = this.container.querySelector('#audioToggleBtn');
 
     this.playBtn.addEventListener('click', () => this.toggle());
+
+    this.audioToggleBtn.addEventListener('click', () => {
+      this.isAudioEnabled = !this.isAudioEnabled;
+      this.audioToggleBtn.textContent = this.isAudioEnabled ? '🔊' : '🔇';
+      if (this.onAudioToggle) this.onAudioToggle(this.isAudioEnabled);
+    });
 
     this.scrubber.addEventListener('input', () => {
       const val = parseInt(this.scrubber.value) / 100000;

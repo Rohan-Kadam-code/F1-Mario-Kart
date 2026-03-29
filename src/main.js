@@ -11,6 +11,7 @@
 import { TrackRenderer } from './renderer/TrackRenderer.js';
 import { DriverSprite, getTeamColor } from './renderer/DriverSprite.js';
 import { ParticleSystem } from './renderer/ParticleSystem.js';
+import { AudioEffects } from './renderer/AudioEffects.js';
 import { MarioEffects, EFFECT_TYPES } from './renderer/MarioEffects.js';
 import { SessionSelector } from './components/SessionSelector.js';
 import { DriverPanel } from './components/DriverPanel.js';
@@ -59,6 +60,7 @@ const state = {
 
   // Event detection
   lastPositionMap: new Map(),
+  lastIntervalMap: new Map(), // driverNumber -> last recorded interval value
   fastestLapTime: Infinity,
   fastestLapDriver: null,
   detectedEvents: new Set(),
@@ -79,7 +81,8 @@ const eventFeed = document.getElementById('eventFeed');
    ============================================ */
 const trackRenderer = new TrackRenderer(canvas);
 const particles = new ParticleSystem();
-const marioEffects = new MarioEffects(overlay, particles, eventFeed);
+const audioController = new AudioEffects();
+const marioEffects = new MarioEffects(overlay, particles, eventFeed, audioController);
 
 const sessionSelector = new SessionSelector(
   document.getElementById('sessionSelectorContainer'),
@@ -134,8 +137,14 @@ function init() {
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  playbackControls.onPlay = () => { state.isPlaying = true; };
+  playbackControls.onPlay = () => { 
+    state.isPlaying = true; 
+    audioController.init();
+  };
   playbackControls.onPause = () => { state.isPlaying = false; };
+  playbackControls.onAudioToggle = (enabled) => {
+    audioController.toggle(enabled);
+  };
   playbackControls.onSeek = (val) => {
     state.currentRaceTime = val * state.raceDuration;
   };
@@ -711,7 +720,31 @@ function detectEvents(posSnapshot, raceTimeMs) {
       }
     }
 
+    // --- Banana Defense Detection (Gap < 1s to > 1s) ---
+    const prevInterval = state.lastIntervalMap.get(driverNum) || 999;
+    if (prevInterval < 1.0 && intervalVal >= 1.0 && data.position > 1) {
+      const defenseKey = `defense:${driverNum}:${timeBucket}`;
+      if (!state.detectedEvents.has(defenseKey)) {
+        state.detectedEvents.add(defenseKey);
+        // Find driver ahead to drop the banana
+        for (const [num2, d2] of posSnapshot.entries()) {
+          if (d2.position === data.position - 1) {
+            const aheadSprite = state.sprites.get(num2);
+            if (aheadSprite) {
+              marioEffects.trigger(EFFECT_TYPES.YELLOW_FLAG, {
+                cx: aheadSprite.cx,
+                cy: aheadSprite.cy,
+                lap: state.currentLap
+              });
+            }
+            break;
+          }
+        }
+      }
+    }
+
     state.lastPositionMap.set(driverNum, data.position);
+    state.lastIntervalMap.set(driverNum, intervalVal);
   });
 
   // --- Retirement / Blue Shell detection ---

@@ -93,10 +93,11 @@ const EFFECT_CONFIG = {
 };
 
 export class MarioEffects {
-  constructor(overlay, particles, eventFeed) {
+  constructor(overlay, particles, eventFeed, audio) {
     this.overlay = overlay;
     this.particles = particles;
     this.eventFeed = eventFeed;
+    this.audio = audio; // Native synth engine
     this.activeEffects = [];
     this.isRaining = false;
     this.hasSafetyCar = false;
@@ -116,9 +117,11 @@ export class MarioEffects {
     switch (type) {
       case EFFECT_TYPES.OVERTAKE:
         if (data.cx !== undefined) {
+          this.particles.emitSpotlight(data.cx, data.cy, 'rgba(255, 128, 0, 0.8)');
           this.particles.emitBoost(data.cx, data.cy, data.color || '#ffcc00', 20);
           this._showDOMEffect('🍄', data.cx, data.cy - 10, 'effect-mushroom');
         }
+        if (this.audio) this.audio.playMushroom();
         break;
 
       case EFFECT_TYPES.PIT_STOP:
@@ -134,10 +137,12 @@ export class MarioEffects {
           data.sprite.starTimer = 180; // 3 seconds at 60fps
         }
         if (data.cx !== undefined) {
+          this.particles.emitSpotlight(data.cx, data.cy, 'rgba(251, 191, 36, 0.9)');
           this.particles.emitStarSparkle(data.cx, data.cy);
           this._showDOMEffect('⭐', data.cx, data.cy - 15, 'effect-star');
         }
         this._flashOverlay('lightning-flash');
+        if (this.audio) this.audio.playStar();
         break;
 
       case EFFECT_TYPES.DRS:
@@ -147,18 +152,25 @@ export class MarioEffects {
         break;
 
       case EFFECT_TYPES.YELLOW_FLAG:
+        if (data.cx !== undefined) {
+          this.particles.emitSpotlight(data.cx, data.cy, 'rgba(255, 255, 0, 0.6)');
+        }
         this._showDOMEffect('🍌', data.cx || 200, data.cy || 200, 'effect-banana');
+        if (this.audio) this.audio.playBanana();
         break;
 
       case EFFECT_TYPES.POKE:
         if (data.cx !== undefined) {
+          this.particles.emitSpotlight(data.cx, data.cy, 'rgba(255, 0, 0, 0.4)');
           this._showDOMEffect('🥊', data.cx, data.cy, 'effect-poke');
         }
+        if (this.audio) this.audio.playPoke();
         break;
 
       case EFFECT_TYPES.RED_FLAG:
         this._flashOverlay('effect-red-shell');
         this._triggerScreenShake();
+        if (this.audio) this.audio.playCrash();
         break;
 
       case EFFECT_TYPES.SAFETY_CAR:
@@ -182,6 +194,7 @@ export class MarioEffects {
           data.sprite.isRetired = true;
         }
         this._triggerScreenShake();
+        if (this.audio) this.audio.playCrash();
         break;
 
       case EFFECT_TYPES.RACE_FINISH:

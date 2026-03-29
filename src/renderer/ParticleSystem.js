@@ -87,6 +87,15 @@ export class ParticleSystem {
         ctx.arc(p.x, p.y, p.size * (1 + (1 - p.alpha) * 2), 0, Math.PI * 2);
         ctx.fillStyle = p.color;
         ctx.fill();
+      } else if (p.type === 'spotlight') {
+        const radius = p.size + (p.maxLife - p.life) * 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = p.color;
+        ctx.stroke();
+        ctx.fillStyle = p.color.replace(/[\d.]+\)$/g, `${0.2 * p.alpha})`); // inner glow
+        ctx.fill();
       }
 
       ctx.restore();
@@ -108,6 +117,17 @@ export class ParticleSystem {
         'spark'
       ));
     }
+  }
+
+  /** Emit a cinematic spotlight ring to draw attention */
+  emitSpotlight(x, y, color = 'rgba(255, 200, 0, 0.8)') {
+    this.particles.push(new Particle(
+      x, y, 0, 0, 
+      45, // frames life
+      10, // initial size
+      color,
+      'spotlight'
+    ));
   }
 
   /** Emit explosion burst (for retirement / blue shell) */
