@@ -113,8 +113,11 @@ export class DriverPanel {
         tireEl.textContent = tireLabel;
       }
 
-      // Re-order in DOM
-      this.listEl.appendChild(card);
+      // Re-order in DOM (only when order actually differs to prevent breaking 60fps hit-testing during physical clicks)
+      const currentElementAtSlot = this.listEl.children[index];
+      if (currentElementAtSlot !== card) {
+        this.listEl.insertBefore(card, currentElementAtSlot);
+      }
     });
   }
 

@@ -438,10 +438,29 @@ body {
 }
 
 #app.full-window #header,
-#app.full-window #driverPanel,
 #app.full-window #eventPanel,
 #app.full-window #raceInfoBar {
   display: none !important;
+}
+
+#app.full-window #driverPanel {
+  position: absolute;
+  top: var(--space-md);
+  left: var(--space-md);
+  bottom: 80px; /* Leave room for playback bar */
+  z-index: 50;
+  background: rgba(10, 10, 15, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  max-width: 260px;
+  border-radius: var(--radius-md);
+  display: flex !important;
+  opacity: 0.95;
+  transition: opacity 0.2s ease;
+}
+
+#app.full-window #driverPanel:hover {
+  opacity: 1;
 }
 
 #app.full-window #mainLayout {

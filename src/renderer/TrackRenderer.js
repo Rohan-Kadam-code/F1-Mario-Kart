@@ -774,14 +774,13 @@ export class TrackRenderer {
     
     // Draw current viewport bounds mapping
     if (this.zoom > 1) {
-      // Map the 4 corners of the canvas back to un-transformed coordinates, then to minimap
-      const cwCenterRaw = (w / 2 - this.panX) / this.zoom;
-      const chCenterRaw = (h / 2 - this.panY) / this.zoom;
+      const halfW = w / 2;
+      const halfH = h / 2;
       
-      const tlRaw_cx = cwCenterRaw - (w / 2) / this.zoom;
-      const tlRaw_cy = chCenterRaw - (h / 2) / this.zoom;
-      const brRaw_cx = cwCenterRaw + (w / 2) / this.zoom;
-      const brRaw_cy = chCenterRaw + (h / 2) / this.zoom;
+      const tlRaw_cx = (-halfW - this.panX) / this.zoom + halfW;
+      const tlRaw_cy = (-halfH - this.panY) / this.zoom + halfH;
+      const brRaw_cx = (halfW - this.panX) / this.zoom + halfW;
+      const brRaw_cy = (halfH - this.panY) / this.zoom + halfH;
       
       // Inverse of raw projection
       const getRawCoords = (c_x, c_y) => {
@@ -799,7 +798,7 @@ export class TrackRenderer {
       // Draw standard box
       ctx.beginPath();
       ctx.rect(miniTL.cx, miniTL.cy, miniBR.cx - miniTL.cx, miniBR.cy - miniTL.cy);
-      ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.4)';
       ctx.lineWidth = 1;
       ctx.stroke();
     }

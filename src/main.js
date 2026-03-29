@@ -103,6 +103,11 @@ function toggleDriverTracking(driverNum) {
     if (trackRenderer.zoom < 2.5) trackRenderer.zoom = 2.5;
   }
   driverPanel.setTrackedDriver(state.trackedDriver);
+  
+  // Clear all cached sprite trails because sudden zoom/panning breaks point coherence
+  for (const sprite of state.sprites.values()) {
+    sprite.trail = [];
+  }
 }
 
 // Clear tracking if user manually drags canvas
