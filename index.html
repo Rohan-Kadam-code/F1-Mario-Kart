@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 Mario Kart Visualiser | Race Replay with Power-Up Effects</title>
+  <meta name="description" content="Immersive Formula 1 race visualiser with Mario Kart-inspired effects. Replay real F1 races with mushroom boosts, star power, and blue shell animations." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/styles/index.css" />
+  <link rel="stylesheet" href="/src/styles/mario-effects.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <div class="header-left">
+        <div class="logo">
+          <span class="logo-icon">🏎️</span>
+          <h1>F1 <span class="accent">Mario Kart</span> Visualiser</h1>
+        </div>
+      </div>
+      <div class="header-center" id="sessionSelectorContainer"></div>
+      <div class="header-right">
+        <div id="weatherWidget" class="weather-widget"></div>
+      </div>
+    </header>
+
+    <!-- Main Layout -->
+    <main id="mainLayout">
+      <!-- Left Sidebar — Driver Panel -->
+      <aside id="driverPanel" class="glass-panel">
+        <div class="panel-header">
+          <h2>🏁 Drivers</h2>
+          <span class="lap-indicator" id="lapIndicator">Lap 0/0</span>
+        </div>
+        <div id="driverList" class="driver-list"></div>
+      </aside>
+
+      <!-- Center — Race Canvas -->
+      <section id="raceSection">
+        <div class="canvas-container" id="canvasContainer">
+          <canvas id="raceTrack"></canvas>
+          <div id="effectOverlay" class="effect-overlay"></div>
+          <div id="loadingOverlay" class="loading-overlay">
+            <div class="loader">
+              <div class="loader-kart">🏎️</div>
+              <p>Loading Race Data...</p>
+              <div class="loader-bar"><div class="loader-fill" id="loaderFill"></div></div>
+            </div>
+          </div>
+        </div>
+        <!-- Playback Controls -->
+        <div id="playbackControls" class="glass-panel playback-bar"></div>
+      </section>
+
+      <!-- Right Sidebar — Event Feed -->
+      <aside id="eventPanel" class="glass-panel">
+        <div class="panel-header">
+          <h2>📡 Live Feed</h2>
+        </div>
+        <div id="eventFeed" class="event-feed"></div>
+      </aside>
+    </main>
+
+    <!-- Bottom Bar — Race Info -->
+    <footer id="raceInfoBar" class="glass-panel"></footer>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
