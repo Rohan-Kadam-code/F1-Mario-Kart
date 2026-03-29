@@ -103,7 +103,7 @@ function toggleDriverTracking(driverNum) {
     if (trackRenderer.zoom < 2.5) trackRenderer.zoom = 2.5;
   }
   driverPanel.setTrackedDriver(state.trackedDriver);
-  
+
   // Clear all cached sprite trails because sudden zoom/panning breaks point coherence
   for (const sprite of state.sprites.values()) {
     sprite.trail = [];
@@ -213,9 +213,9 @@ async function onSessionSelected(session) {
   try {
     const [drivers, positions, laps, stints, weather, raceControl, intervals, pitStops] =
       await Promise.all([
-        api.getDrivers(session.session_key),
-        api.getPositions(session.session_key),
-        api.getLaps(session.session_key),
+        api.getDrivers(session.session_key).catch(() => []),
+        api.getPositions(session.session_key).catch(() => []),
+        api.getLaps(session.session_key).catch(() => []),
         api.getStints(session.session_key).catch(() => []),
         api.getWeather(session.session_key).catch(() => []),
         api.getRaceControl(session.session_key).catch(() => []),
@@ -363,11 +363,11 @@ function updateLoadProgress(pct) {
    Timeline & Data Processing
    ============================================ */
 function buildTimeline() {
-  if (state.positions.length === 0) return;
+  if (state.drivers.length === 0) return;
 
   // Determine total laps
   const maxLap = state.laps.reduce((max, l) => Math.max(max, l.lap_number || 0), 0);
-  state.totalLaps = maxLap || 0;
+  state.totalLaps = maxLap || (state.drivers.length > 0 ? 1 : 0);
   state.currentLap = 0;
 
   // Find the exact "Lights Out" start of Lap 1 and Checkered flag end
@@ -392,16 +392,24 @@ function buildTimeline() {
   }
 
   // Restrict timeline to actual racing action (not pre-race grid sitting)
+  let fallbackStart = 0;
+  let fallbackEnd = 0;
+  
+  if (state.positions.length > 0) {
+    fallbackStart = new Date(state.positions[0].date).getTime();
+    fallbackEnd = new Date(state.positions[state.positions.length - 1].date).getTime();
+  }
+
   if (earliestLapStart !== Infinity) {
     state.raceStartTime = earliestLapStart - 5000; // 5 seconds before lights out
   } else {
-    state.raceStartTime = new Date(state.positions[0].date).getTime();
+    state.raceStartTime = fallbackStart !== 0 ? fallbackStart : (state.session ? new Date(state.session.date_start).getTime() : Date.now());
   }
 
   if (latestLapEnd !== 0) {
     state.raceEndTime = latestLapEnd + 10000; // 10 seconds post-checkered
   } else {
-    state.raceEndTime = new Date(state.positions[state.positions.length - 1].date).getTime();
+    state.raceEndTime = fallbackEnd !== 0 ? fallbackEnd : state.raceStartTime + (2 * 60 * 60 * 1000);
   }
 
   state.raceDuration = state.raceEndTime - state.raceStartTime;
@@ -473,7 +481,7 @@ function createSprites() {
  * Returns a Map of driverNumber -> { position, gap, tireCompound }
  */
 function getPositionSnapshot(raceTimeMs) {
-  if (state.positions.length === 0) return new Map();
+  if (state.drivers.length === 0) return new Map();
 
   const currentEpoch = state.raceStartTime + raceTimeMs;
   const currentTimeStr = new Date(currentEpoch).toISOString();
@@ -488,6 +496,18 @@ function getPositionSnapshot(raceTimeMs) {
     });
   }
 
+  // Fallback: If at the very start of the race or missing telemetry, provide at least the grid position.
+  state.drivers.forEach((driver, index) => {
+    if (!snapshot.has(driver.driver_number)) {
+      // Find their absolute first data point in the entire session record
+      const firstEver = state.positions.find(p => p.driver_number === driver.driver_number);
+      snapshot.set(driver.driver_number, {
+        position: firstEver ? firstEver.position : (index + 1), // Grid fallback
+        date: firstEver ? firstEver.date : currentTimeStr,
+      });
+    }
+  });
+
   // Add gap info from intervals
   const intervalSnapshot = new Map();
   for (const iv of state.intervals) {
@@ -497,10 +517,11 @@ function getPositionSnapshot(raceTimeMs) {
 
   // Add stint/tire info (use current lap to find active stint)
   const stintSnapshot = new Map();
+  const activeLap = state.currentLap === 0 ? 1 : state.currentLap;
   for (const s of state.stints) {
     const lapStart = s.lap_start || 0;
     const lapEnd = s.lap_end || 999;
-    if (state.currentLap >= lapStart && state.currentLap <= lapEnd) {
+    if (activeLap >= lapStart && activeLap <= lapEnd) {
       stintSnapshot.set(s.driver_number, s);
     }
   }
@@ -804,7 +825,7 @@ function renderLoop(timestamp) {
       if (data && sprite && !sprite.isPitting && !sprite.isRetired) {
         const oldPanX = trackRenderer.panX;
         const oldPanY = trackRenderer.panY;
-        
+
         let didFocus = false;
         if (useRealPos) {
           const realPos = cache.getDriverPosition(state.trackedDriver, currentEpoch);
@@ -812,7 +833,7 @@ function renderLoop(timestamp) {
             trackRenderer.setTrackingFocus(realPos.x, realPos.y);
             didFocus = true;
           }
-        } 
+        }
         if (!didFocus) {
           // Fallback tracking
           const progress = getDriverTrackProgress(state.trackedDriver, state.currentRaceTime, data.position, totalDrivers);

@@ -70,7 +70,7 @@ export class DriverPanel {
     // Sort cards by position
     const sorted = [...driverData.entries()].sort((a, b) => a[1].position - b[1].position);
 
-    sorted.forEach(([driverNum, data]) => {
+    sorted.forEach(([driverNum, data], index) => {
       const card = this.driverCards.get(driverNum);
       if (!card) return;
 

@@ -445,22 +445,27 @@ body {
 
 #app.full-window #driverPanel {
   position: absolute;
-  top: var(--space-md);
-  left: var(--space-md);
-  bottom: 80px; /* Leave room for playback bar */
-  z-index: 50;
-  background: rgba(10, 10, 15, 0.85);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  max-width: 260px;
-  border-radius: var(--radius-md);
+  top: 10px;
+  left: 10px;
+  bottom: 80px;
+  width: 255px;
+  background: rgba(10, 10, 15, 0.9);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border-left: 4px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
   display: flex !important;
-  opacity: 0.95;
-  transition: opacity 0.2s ease;
+  flex-direction: column;
+  opacity: 0.98;
+  transition: all 0.3s ease;
+  overflow: hidden;
 }
 
 #app.full-window #driverPanel:hover {
-  opacity: 1;
+  transform: translateX(5px);
+  box-shadow: 0 0 50px rgba(225, 6, 0, 0.2);
 }
 
 #app.full-window #mainLayout {
