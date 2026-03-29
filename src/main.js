@@ -62,6 +62,7 @@ const state = {
   fastestLapTime: Infinity,
   fastestLapDriver: null,
   detectedEvents: new Set(),
+  trackedDriver: null,
 };
 
 /* ============================================
@@ -87,8 +88,30 @@ const sessionSelector = new SessionSelector(
 
 const driverPanel = new DriverPanel(
   document.getElementById('driverList'),
-  document.getElementById('lapIndicator')
+  document.getElementById('lapIndicator'),
+  (driverNum) => toggleDriverTracking(driverNum)
 );
+
+function toggleDriverTracking(driverNum) {
+  if (state.trackedDriver === driverNum) {
+    state.trackedDriver = null;
+    trackRenderer.trackingX = null;
+    trackRenderer.trackingY = null;
+  } else {
+    state.trackedDriver = driverNum;
+    // Auto-zoom in slightly if we aren't already
+    if (trackRenderer.zoom < 2.5) trackRenderer.zoom = 2.5;
+  }
+  driverPanel.setTrackedDriver(state.trackedDriver);
+}
+
+// Clear tracking if user manually drags canvas
+window.addEventListener('track-pan-break', () => {
+  if (state.trackedDriver !== null) {
+    state.trackedDriver = null;
+    driverPanel.setTrackedDriver(null);
+  }
+});
 
 const playbackControls = new PlaybackControls(
   document.getElementById('playbackControls')
@@ -135,6 +158,11 @@ function createZoomControls() {
   document.getElementById('zoomIn').addEventListener('click', () => trackRenderer.zoomIn());
   document.getElementById('zoomOut').addEventListener('click', () => trackRenderer.zoomOut());
   document.getElementById('zoomReset').addEventListener('click', () => trackRenderer.resetView());
+
+  document.getElementById('fullWindowToggle').addEventListener('click', () => {
+    document.getElementById('app').classList.toggle('full-window');
+    setTimeout(() => resizeCanvas(), 50); // Small delay to let CSS transition finish
+  });
 }
 
 function resizeCanvas() {
@@ -763,6 +791,47 @@ function renderLoop(timestamp) {
     const currentEpoch = state.raceStartTime + state.currentRaceTime;
     const cache = state.locationCache;
     const useRealPos = cache.isCalibrated && cache.hasDataAt(currentEpoch);
+
+    // --- Pre-Render: Camera Follow ---
+    if (state.trackedDriver !== null) {
+      const data = posSnapshot.get(state.trackedDriver);
+      const sprite = state.sprites.get(state.trackedDriver);
+      if (data && sprite && !sprite.isPitting && !sprite.isRetired) {
+        const oldPanX = trackRenderer.panX;
+        const oldPanY = trackRenderer.panY;
+        
+        let didFocus = false;
+        if (useRealPos) {
+          const realPos = cache.getDriverPosition(state.trackedDriver, currentEpoch);
+          if (realPos) {
+            trackRenderer.setTrackingFocus(realPos.x, realPos.y);
+            didFocus = true;
+          }
+        } 
+        if (!didFocus) {
+          // Fallback tracking
+          const progress = getDriverTrackProgress(state.trackedDriver, state.currentRaceTime, data.position, totalDrivers);
+          const p = ((progress % 1) + 1) % 1;
+          const targetLen = p * trackRenderer.totalLength;
+          let lo = 0, hi = trackRenderer.trackLengths.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (trackRenderer.trackLengths[mid] < targetLen) lo = mid + 1;
+            else hi = mid;
+          }
+          const pt0 = trackRenderer.trackPoints[Math.max(0, lo - 1)];
+          if (pt0) trackRenderer.setTrackingFocus(pt0.x, pt0.y);
+        }
+
+        const dx = trackRenderer.panX - oldPanX;
+        const dy = trackRenderer.panY - oldPanY;
+        if (dx !== 0 || dy !== 0) {
+          for (const s of state.sprites.values()) {
+            s.pan(dx, dy);
+          }
+        }
+      }
+    }
 
     posSnapshot.forEach((data, driverNum) => {
       const sprite = state.sprites.get(driverNum);

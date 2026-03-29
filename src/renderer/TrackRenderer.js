@@ -35,6 +35,10 @@ export class TrackRenderer {
     this.zoom = 1;              // user zoom multiplier
     this.panX = 0;              // user pan offset (pixels)
     this.panY = 0;
+    
+    // Tracking state
+    this.trackingX = null;
+    this.trackingY = null;
 
     // Drag state
     this._isDragging = false;
@@ -96,6 +100,11 @@ export class TrackRenderer {
     this._dragPanStartX = this.panX;
     this._dragPanStartY = this.panY;
     this.canvas.style.cursor = 'grabbing';
+    
+    // Break tracking lock if user manually drags map
+    this.trackingX = null;
+    this.trackingY = null;
+    window.dispatchEvent(new CustomEvent('track-pan-break'));
   }
 
   _onMouseMove(e) {
@@ -123,6 +132,21 @@ export class TrackRenderer {
 
   zoomOut() {
     this.zoom = Math.max(0.5, this.zoom * 0.8);
+  }
+
+  /** Dynamically lock camera pan to a specific track coordinate */
+  setTrackingFocus(x, y) {
+    this.trackingX = x;
+    this.trackingY = y;
+    
+    const w = this.canvas.clientWidth / 2;
+    const h = this.canvas.clientHeight / 2;
+    const cx_raw = x * this.baseScale + this.baseOffsetX;
+    const cy_raw = -(y * this.baseScale) + this.baseOffsetY;
+    
+    // Force panX/panY to center the target coordinate
+    this.panX = -(cx_raw - w) * this.zoom;
+    this.panY = -(cy_raw - h) * this.zoom;
   }
 
   /* =============================================
@@ -420,6 +444,11 @@ export class TrackRenderer {
 
     // 10. Zoom indicator
     this._drawZoomIndicator(ctx, w, h);
+
+    // 11. HUD Minimap (Always shown if tracking OR zoomed in)
+    if (this.trackingX !== null || this.zoom > 1.2) {
+      this._drawMinimap(ctx, w, h);
+    }
   }
 
   isPointInPitLane(x, y) {
@@ -674,6 +703,107 @@ export class TrackRenderer {
     ctx.font = '400 9px "Outfit", sans-serif';
     ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
     ctx.fillText('Scroll to zoom • Drag to pan', w - 12, 22);
+    ctx.restore();
+  }
+
+  /** Mini HUD Map Overlay */
+  _drawMinimap(ctx, w, h) {
+    if (this.trackPoints.length < 2 || !this.trackBounds) return;
+    
+    const mapSize = 140; 
+    const padding = 10;
+    const margin = 20;
+    const startX = w - mapSize - margin;
+    const startY = h - mapSize - margin - 50; // Above circuit name
+    
+    // Map background
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(startX, startY, mapSize, mapSize, 8);
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.7)';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.stroke();
+    ctx.clip();
+    
+    // Calculate mini scale
+    const { minX, maxX, minY, maxY } = this.trackBounds;
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const miniScale = Math.min((mapSize - padding * 2) / rangeX, (mapSize - padding * 2) / rangeY);
+    const miniOffX = startX + (mapSize - rangeX * miniScale) / 2 - minX * miniScale;
+    const miniOffY = startY + (mapSize + rangeY * miniScale) / 2 + minY * miniScale;
+
+    const toMiniCanvas = (x, y) => ({
+      cx: x * miniScale + miniOffX,
+      cy: -(y * miniScale) + miniOffY
+    });
+
+    // Draw main track shape
+    ctx.beginPath();
+    let first = toMiniCanvas(this.trackPoints[0].x, this.trackPoints[0].y);
+    ctx.moveTo(first.cx, first.cy);
+    for (let i = 1; i < this.trackPoints.length; i++) {
+        const p = toMiniCanvas(this.trackPoints[i].x, this.trackPoints[i].y);
+        ctx.lineTo(p.cx, p.cy);
+    }
+    ctx.closePath();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Draw tracking dot if active
+    if (this.trackingX !== null) {
+      const p = toMiniCanvas(this.trackingX, this.trackingY);
+      
+      // Outer ping
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(225, 6, 0, 0.4)';
+      ctx.fill();
+      
+      // Inner dot
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff6b35';
+      ctx.fill();
+    }
+    
+    // Draw current viewport bounds mapping
+    if (this.zoom > 1) {
+      // Map the 4 corners of the canvas back to un-transformed coordinates, then to minimap
+      const cwCenterRaw = (w / 2 - this.panX) / this.zoom;
+      const chCenterRaw = (h / 2 - this.panY) / this.zoom;
+      
+      const tlRaw_cx = cwCenterRaw - (w / 2) / this.zoom;
+      const tlRaw_cy = chCenterRaw - (h / 2) / this.zoom;
+      const brRaw_cx = cwCenterRaw + (w / 2) / this.zoom;
+      const brRaw_cy = chCenterRaw + (h / 2) / this.zoom;
+      
+      // Inverse of raw projection
+      const getRawCoords = (c_x, c_y) => {
+        return {
+           x: (c_x - this.baseOffsetX) / this.baseScale,
+           y: -(c_y - this.baseOffsetY) / this.baseScale
+        };
+      };
+      
+      const tl = getRawCoords(tlRaw_cx, tlRaw_cy);
+      const br = getRawCoords(brRaw_cx, brRaw_cy);
+      const miniTL = toMiniCanvas(tl.x, tl.y);
+      const miniBR = toMiniCanvas(br.x, br.y);
+      
+      // Draw standard box
+      ctx.beginPath();
+      ctx.rect(miniTL.cx, miniTL.cy, miniBR.cx - miniTL.cx, miniBR.cy - miniTL.cy);
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    
     ctx.restore();
   }
 

@@ -5,9 +5,10 @@
 import { getTeamColor } from '../renderer/DriverSprite.js';
 
 export class DriverPanel {
-  constructor(listEl, lapIndicatorEl) {
+  constructor(listEl, lapIndicatorEl, onDriverClick) {
     this.listEl = listEl;
     this.lapIndicatorEl = lapIndicatorEl;
+    this.onDriverClick = onDriverClick || (() => {});
     this.driverCards = new Map(); // driverNumber -> DOM element
     this.previousPositions = new Map();
   }
@@ -46,7 +47,19 @@ export class DriverPanel {
         <div class="driver-tire" data-field="tire"></div>
       </div>
     `;
+
+    card.addEventListener('click', () => {
+      this.onDriverClick(driver.driver_number);
+    });
+
     return card;
+  }
+
+  setTrackedDriver(driverNum) {
+    this.driverCards.forEach((card, num) => {
+      if (num === driverNum) card.classList.add('tracked-driver');
+      else card.classList.remove('tracked-driver');
+    });
   }
 
   /**

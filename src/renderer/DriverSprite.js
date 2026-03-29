@@ -70,6 +70,18 @@ export class DriverSprite {
   }
 
   /**
+   * Adjust screen coordinates when camera moves natively.
+   */
+  pan(dx, dy) {
+    this.cx += dx;
+    this.cy += dy;
+    for (const pt of this.trail) {
+      pt.cx += dx;
+      pt.cy += dy;
+    }
+  }
+
+  /**
    * Render this driver kart on the canvas.
    */
   draw(ctx, frameTime) {
