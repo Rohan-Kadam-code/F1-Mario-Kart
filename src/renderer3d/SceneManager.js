@@ -42,9 +42,11 @@ export class SceneManager {
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
 
-    // ── Main Camera (Perspective — isometric-ish) ──
+    // ── Main Camera (Perspective) ──
     const aspect = container.clientWidth / container.clientHeight;
-    this.camera = new THREE.PerspectiveCamera(45, aspect, 1.0, 60000);
+    // FOV increased from 45 to 70 to radically improve the sensation of speed
+    // (A 45 FOV compresses depth and acts like a telephoto lens, making high speeds feel slow)
+    this.camera = new THREE.PerspectiveCamera(70, aspect, 1.0, 60000);
     this.camera.position.set(0, 800, 600);
     this.camera.lookAt(0, 0, 0);
 
@@ -442,6 +444,15 @@ export class SceneManager {
 
         // Rigid lock-on for onboard (Zero-Latency)
         this.camera.position.copy(camWorldPos);
+
+        // Add dynamic speed-based camera shake to give a visceral feeling of high speed
+        const speed = kart._smoothSpeed || kart.speed || 0;
+        if (speed > 150) { // Shake activates above 150 km/h
+          const shakeMag = (speed - 150) * 0.0015; // Scales with speed
+          this.camera.position.x += (Math.random() - 0.5) * shakeMag;
+          this.camera.position.y += (Math.random() - 0.5) * shakeMag;
+          this.camera.position.z += (Math.random() - 0.5) * shakeMag;
+        }
 
         // Look ahead along car orientation
         const lookAheadDist = 50;
