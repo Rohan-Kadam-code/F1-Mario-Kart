@@ -21,6 +21,7 @@ import { SessionSelector } from './components/SessionSelector.js';
 import { DriverPanel } from './components/DriverPanel.js';
 import { PlaybackControls } from './components/PlaybackControls.js';
 import { RaceInfo } from './components/RaceInfo.js';
+import { MiniMap } from './components/MiniMap.js';
 import * as api from './api/openf1.js';
 import { findCircuit } from './data/circuitData.js';
 import { LocationCache } from './data/LocationCache.js';
@@ -76,7 +77,9 @@ const eventFeed = document.getElementById('eventFeed');
    Core Systems
    ============================================ */
 const sceneManager = new SceneManager(container3D);
+window.sceneManager = sceneManager;
 const track3D = new Track3D(sceneManager.scene);
+const miniMap = new MiniMap(document.getElementById('miniMap'));
 const particles3D = new Particles3D(sceneManager.scene);
 const environment3D = new Environment3D(sceneManager.scene);
 
@@ -334,6 +337,7 @@ async function onSessionSelected(session) {
     // Set track data in scene manager and build 3D track
     sceneManager.setTrackData(trackPoints2D, pitLanePoints2D);
     track3D.build(sceneManager.trackPoints3D, sceneManager.pitLanePoints3D || [], matchedCircuit);
+    miniMap.setTrackData(trackPoints2D);
 
     // Store 2D track data for fallback position calculations
     state.trackPoints2D = trackPoints2D;
@@ -899,6 +903,18 @@ function renderLoop(timestamp) {
     detectEvents(posSnapshot, state.currentRaceTime);
   }
 
+  // === F1 START LIGHTS LOGIC ===
+  if (sceneManager.track3D && sceneManager.track3D.setStartLights) {
+    // Simulate a 5-second countdown to Lights Out at T=0
+    // T-5s: 1 light, T-4s: 2 lights, ..., T-1s: 5 lights, T=0: OFF
+    if (state.currentRaceTime < 0 && state.currentRaceTime > -5000) {
+      const lightsCount = Math.floor(Math.abs(state.currentRaceTime) / 1000);
+      sceneManager.track3D.setStartLights(6 - lightsCount); // 1 to 5
+    } else {
+      sceneManager.track3D.setStartLights(0);
+    }
+  }
+
   // Update kart positions
   if (sceneManager.trackPoints3D.length > 0 && posSnapshot.size > 0) {
     const totalDrivers = posSnapshot.size;
@@ -934,7 +950,7 @@ function renderLoop(timestamp) {
       if (useRealPos) {
         const realPos = cache.getDriverPosition(driverNum, currentEpoch);
         if (realPos) {
-          const world = sceneManager.toWorldCoords(realPos.x, realPos.y);
+          let world = sceneManager.toWorldCoords(realPos.x, realPos.y);
           
           // Stable orientation from dual-sampling tangent (Current + Look-ahead)
           const tangentCurrent = cache.getDriverTangent(driverNum, currentEpoch);
@@ -942,12 +958,25 @@ function renderLoop(timestamp) {
           
           let angle = kart.currentAngle;
           if (tangentCurrent && tangentFuture) {
-            // Average tangents for predictive smoothing
             const tx = (tangentCurrent.x + tangentFuture.x) * 0.5;
             const ty = (tangentCurrent.y + tangentFuture.y) * 0.5;
             angle = Math.atan2(tx, -ty);
           } else if (tangentCurrent) {
             angle = Math.atan2(tangentCurrent.x, -tangentCurrent.y);
+          }
+
+          // === PERFECT GRID STAGGER LOGIC ===
+          // Even at the start of a race, GPS coordinates often overlap on the centerline.
+          // We apply a professional 1-2 stagger [Left/Right] perpendicular to the track heading.
+          const gridWeight = Math.max(0, 1 - (state.currentRaceTime / 5000)); // Blends out after 5 seconds
+          if (gridWeight > 0) {
+            const isLeft = (data.position % 2 === 1);
+            const lateralOffset = (isLeft ? -4.5 : 4.5) * gridWeight;
+            
+            // Calculate perpendicular vector: (-cos(A), 0, sin(A)) or similar depending on world orientation
+            // Based on our atan2(tx, -ty), this is the math for the sideways push:
+            world.x += Math.cos(angle) * lateralOffset;
+            world.z -= Math.sin(angle) * lateralOffset;
           }
 
           // Direct speed from spline derivative
@@ -993,10 +1022,37 @@ function renderLoop(timestamp) {
       kart.hasMushroom = speedKmh > 315 || (speedKmh > 200 && speedKmh > prevSpeed * 1.05);
       kart._prevSpeed = speedKmh;
 
-      if (kart.hasMushroom && state.isPlaying) {
-        particles3D.emitBoost(pos3D.x, pos3D.y, pos3D.z, kart.teamColor, 2);
-      }
     });
+
+    // === DYNAMIC OVERTAKING LINES (Collision Avoidance) ===
+    // Prevent 3D meshes clipping when GPS coordinates overlap.
+    const activeKarts = Array.from(state.karts.values()).filter(k => k.mesh.visible);
+    const repulsionRadius = 3.8; // Kart length + safety distance
+    
+    for (let i = 0; i < activeKarts.length; i++) {
+      for (let j = i + 1; j < activeKarts.length; j++) {
+        const kA = activeKarts[i];
+        const kB = activeKarts[j];
+        
+        const dx = kB._targetPos.x - kA._targetPos.x;
+        const dz = kB._targetPos.z - kA._targetPos.z;
+        const distSq = dx * dx + dz * dz;
+        
+        if (distSq < repulsionRadius * repulsionRadius && distSq > 0.001) {
+          const dist = Math.sqrt(distSq);
+          const overlap = (repulsionRadius - dist);
+          
+          // Apply a gentle repulsion force pushing the target coordinates apart
+          const pushX = (dx / dist) * overlap * 0.4;
+          const pushZ = (dz / dist) * overlap * 0.4;
+          
+          kA._targetPos.x -= pushX;
+          kA._targetPos.z -= pushZ;
+          kB._targetPos.x += pushX;
+          kB._targetPos.z += pushZ;
+        }
+      }
+    }
   }
 
   // Update all karts (animation, trail, effects)
@@ -1015,6 +1071,9 @@ function renderLoop(timestamp) {
 
   // Render 3D scene
   sceneManager.render(timestamp);
+
+  // Update MiniMap
+  miniMap.update(state.karts, state.trackedDriver);
 
   // Update UI
   if (state.raceDuration > 0) {

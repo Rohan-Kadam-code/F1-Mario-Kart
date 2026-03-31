@@ -254,6 +254,47 @@ export class Track3D {
     cross.position.set(p0.x, 12, p0.z);
     cross.rotation.y = angle;
     this.group.add(cross);
+
+    // F1 Start Lights (5 Red LED Pairs)
+    this.startLights = [];
+    const ledGeo = new THREE.SphereGeometry(0.4, 8, 8);
+    const ledOffMat = new THREE.MeshStandardMaterial({ color: 0x221111, roughness: 0.8 });
+    
+    for (let i = 0; i < 5; i++) {
+        const ledGroup = new THREE.Group();
+        // Red LED Top
+        const ledTop = new THREE.Mesh(ledGeo, ledOffMat.clone());
+        ledTop.position.set((i - 2) * 1.8, 0, 0.8); // Offset horizontally on crossbar face
+        ledGroup.add(ledTop);
+        
+        // Red LED Bottom
+        const ledBottom = new THREE.Mesh(ledGeo, ledOffMat.clone());
+        ledBottom.position.set((i - 2) * 1.8, -0.6, 0.8);
+        ledGroup.add(ledBottom);
+        
+        ledGroup.position.set(0, 0, 0); // Relative to cross
+        cross.add(ledGroup);
+        this.startLights.push({ top: ledTop, bottom: ledBottom });
+    }
+  }
+
+  /**
+   * Set F1 start lights state (0-5)
+   * @param {number} count - number of red light pairs to turn on
+   */
+  setStartLights(count) {
+    if (!this.startLights) return;
+    const onColor = 0xff1100;
+    this.startLights.forEach((light, i) => {
+      const isOn = i < count;
+      light.top.material.color.setHex(isOn ? onColor : 0x221111);
+      light.top.material.emissive.setHex(isOn ? onColor : 0x000000);
+      light.top.material.emissiveIntensity = isOn ? 1.5 : 0;
+      
+      light.bottom.material.color.setHex(isOn ? onColor : 0x221111);
+      light.bottom.material.emissive.setHex(isOn ? onColor : 0x000000);
+      light.bottom.material.emissiveIntensity = isOn ? 1.5 : 0;
+    });
   }
 
   /* ── DRS Zones ── */

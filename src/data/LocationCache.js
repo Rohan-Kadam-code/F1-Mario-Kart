@@ -150,11 +150,32 @@ export class LocationCache {
     const firstDriver = this.drivers[0];
     const dData = this.data.get(firstDriver?.driver_number);
     if (dData && dData.length > 50) {
-      const windowEnd = this.raceStartEpoch + 120000; // 2 minutes
-      const calibrationWindow = dData.filter(p => p.epoch <= windowEnd);
+      // GRID-SKIP LOGIC: Find the first moment of significant movement (>20km/h)
+      // Standard F1 pit limiter is 80; grid pull-away is usually fast.
+      let activeStart = this.raceStartEpoch;
+      for (let i = 0; i < Math.min(dData.length, 500); i++) {
+        const p = dData[i];
+        const nextP = dData[i+1];
+        if (!nextP) break;
+        
+        const dt = (nextP.epoch - p.epoch) / 1000;
+        const dx = nextP.x - p.x;
+        const dy = nextP.y - p.y;
+        const speedKms = Math.sqrt(dx*dx + dy*dy) / (dt || 1);
+        const speedKmh = speedKms * 3.6; 
+        
+        if (speedKmh > 20) {
+          activeStart = p.epoch; 
+          console.log(`[LocationCache] Active movement detected at T+${(activeStart - this.raceStartEpoch)/1000}s`);
+          break;
+        }
+      }
+
+      const windowEnd = activeStart + 120000; // 2 minutes from first movement
+      const calibrationWindow = dData.filter(p => p.epoch >= activeStart && p.epoch <= windowEnd);
       
       if (calibrationWindow.length > 20) {
-        console.log(`[LocationCache] Using 2-minute hydrated window for calibration (Driver ${firstDriver.driver_number})`);
+        console.log(`[LocationCache] Using 2-minute active window for calibration (Driver ${firstDriver.driver_number})`);
         this._computeTransform(calibrationWindow);
         return;
       }
