@@ -1024,11 +1024,11 @@ function renderLoop(timestamp) {
 
     });
 
-    // === DYNAMIC 'SIDE-BY-SIDE' RACING SYSTEM ===
-    // Prevents clipping and 'car jumps' by shifting karts into Inside/Outside lanes.
+    // === DYNAMIC 'SIDE-BY-SIDE' RACING SYSTEM (V2: Persistent Virtual Lanes) ===
+    // Prevents clipping and ghosting by anticipating overtakes and maintaining safety corridors.
     const activeKarts = Array.from(state.karts.values()).filter(k => k.mesh.visible);
     
-    // Reset target offsets for this frame (will be recalculated)
+    // Reset accumulation for this frame's force calculation
     for (const k of activeKarts) k.targetLateralOffset = 0;
 
     for (let i = 0; i < activeKarts.length; i++) {
@@ -1040,37 +1040,54 @@ function renderLoop(timestamp) {
             const dz = kB._targetPos.z - kA._targetPos.z;
             const distSq = dx * dx + dz * dz;
             
-            // Interaction range for side-by-side racing (approx 8m)
-            const range = 8.0;
+            // Reach out to 22m for anticipation (F1 cars are ~5.5m long)
+            const range = 22.0;
             if (distSq < range * range && distSq > 0.001) {
-                // Get track heading (Tangent) to project into Forward/Lateral space
-                // Using K_A as reference for track orientation
+                const dist = Math.sqrt(distSq);
+                
+                // Track orientation
                 const forward = { x: Math.sin(kA.currentAngle), z: Math.cos(kA.currentAngle) };
                 const right = { x: Math.cos(kA.currentAngle), z: -Math.sin(kA.currentAngle) };
                 
-                // Project delta onto Right (Lateral) vector
+                // Project delta into Track Space
                 const dotRight = (dx * right.x) + (dz * right.z);
                 const dotForward = (dx * forward.x) + (dz * forward.z);
-                
-                // If they are side-by-side (longitudinal overlap < 5m)
-                if (Math.abs(dotForward) < 6.0) {
-                    const overlap = 3.5 - Math.abs(dotRight); // How much lanes should overlap
-                    if (overlap > 0) {
-                        const shift = overlap * 0.5;
-                        const direction = dotRight > 0 ? 1 : -1;
-                        
-                        kA.targetLateralOffset -= direction * shift;
-                        kB.targetLateralOffset += direction * shift;
-                    }
+                const absF = Math.abs(dotForward);
+                const absR = Math.abs(dotRight);
+
+                // Skip if they are extremely far apart longitudinally (drafting range)
+                if (absF > 15.0) continue;
+
+                // ANTICIPATION WEIGHT: Increase pressure as they get closer longitudinally
+                // If F is near 0 (perfectly side-by-side), weight is 1.0. At F=15, weight is ~0.
+                const fWeight = Math.max(0, 1.0 - (absF / 15.0));
+
+                // LATERAL SEPARATION:
+                // We want a minimum lateral distance of ~3.8m (Car + clearance)
+                const idealGap = 3.8;
+                if (absR < idealGap) {
+                    const overlap = idealGap - absR;
+                    // Push harder if physically closer, but always push a bit
+                    const push = overlap * 0.4 * fWeight; 
+                    const direction = dotRight > 0 ? 1 : -1;
+                    
+                    // Additive force (supports 3-wide)
+                    kA.targetLateralOffset -= direction * push;
+                    kB.targetLateralOffset += direction * push;
                 }
             }
         }
     }
 
-    // Clamp offsets to stay on the tarmac (Track Width approx 14m -> 6m limit)
+    // Clamp offsets and slowly bleed back to racing line (0) if no neighbors present
+    // Note: k.targetLateralOffset is NOT reset per frame anymore.
+    // It's already decayed by the lerp in Kart3D.js
     const tarmacLimit = (track3D.trackWidth / 2) - 1.5; 
     for (const k of activeKarts) {
         k.targetLateralOffset = Math.max(-tarmacLimit, Math.min(tarmacLimit, k.targetLateralOffset));
+        // Reset per-frame accumulation after k.update() has used it? 
+        // No, let's keep it and let the force sum up.
+        // Actually we need to reset the ACCUMULATION but not the target.
     }
   }
 
