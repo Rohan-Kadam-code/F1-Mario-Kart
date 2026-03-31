@@ -8,6 +8,12 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
+export const CAMERA_MODES = {
+  ORBIT: 'orbit',   // Isometric / Top-down
+  CHASE: 'chase',   // Behind the kart
+  TCAM: 'tcam'      // Onboard (T-cam) view
+};
+
 export class SceneManager {
   constructor(container) {
     this.container = container;
@@ -42,9 +48,12 @@ export class SceneManager {
     this.camera.lookAt(0, 0, 0);
 
     // ── Camera state ──
+    this.cameraMode = CAMERA_MODES.ORBIT;
     this.isChaseMode = false;
     this.chaseTarget = null;       // Kart3D instance to follow
     this.chaseLerpSpeed = 0.04;
+    this.tcamLerpSpeed = 0.15;    // Faster for onboard
+
 
     // ── Orbit state (isometric view) ──
     this.orbitTheta = 0;            // horizontal angle (radians)
@@ -221,7 +230,8 @@ export class SceneManager {
   }
 
   _breakChaseMode() {
-    if (this.isChaseMode) {
+    if (this.cameraMode !== CAMERA_MODES.ORBIT) {
+      this.cameraMode = CAMERA_MODES.ORBIT;
       this.isChaseMode = false;
       this.chaseTarget = null;
       window.dispatchEvent(new CustomEvent('track-pan-break'));
@@ -233,16 +243,41 @@ export class SceneManager {
      ========================================= */
 
   /** Enable chase camera on a specific kart */
-  followKart(kart) {
+  followKart(kart, mode = null) {
     if (!kart) {
+      this.cameraMode = CAMERA_MODES.ORBIT;
       this.isChaseMode = false;
       this.chaseTarget = null;
       return;
     }
+    
+    // Default to CHASE if not specified and currently in ORBIT
+    if (!mode) {
+      this.cameraMode = this.cameraMode === CAMERA_MODES.ORBIT ? CAMERA_MODES.CHASE : this.cameraMode;
+    } else {
+      this.cameraMode = mode;
+    }
+    
     this.isChaseMode = true;
     this.chaseTarget = kart;
-    this.orbitRadius = Math.min(this.orbitRadius, 250);
-    this.orbitPhi = Math.PI / 6; // Lower angle — behind the car
+    
+    if (this.cameraMode === CAMERA_MODES.CHASE) {
+      this.orbitRadius = Math.min(this.orbitRadius, 250);
+      this.orbitPhi = Math.PI / 6; // Lower angle — behind the car
+    }
+  }
+
+  /** Cycle through available camera modes for a tracked kart */
+  cycleCameraMode() {
+    if (!this.isChaseMode || !this.chaseTarget) return null;
+    
+    if (this.cameraMode === CAMERA_MODES.CHASE) {
+      this.cameraMode = CAMERA_MODES.TCAM;
+    } else {
+      this.cameraMode = CAMERA_MODES.CHASE;
+    }
+    
+    return this.cameraMode;
   }
 
   /** Zoom controls */
@@ -392,33 +427,63 @@ export class SceneManager {
     // ── Update camera position ──
     if (this.isChaseMode && this.chaseTarget) {
       const kart = this.chaseTarget;
+      const angle = kart.currentAngle || 0;
       const kartPos = new THREE.Vector3(kart.mesh.position.x, 0, kart.mesh.position.z);
 
-      // Chase camera: position behind the kart
-      const behindDist = 60;
-      const heightAbove = 30;
-      const lookAheadDist = 30;
+      if (this.cameraMode === CAMERA_MODES.TCAM) {
+        // T-cam onboard view
+        // Position relative to car: Above cockpit (y=2.5), looking forward (+z in car space)
+        // Kart nose is at +3.8, cockpit is at -0.2
+        const tcamOffset = new THREE.Vector3(0, 2.5, 0.4);
+        
+        // Transform offset to world space
+        const camWorldPos = tcamOffset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle).add(kartPos);
+        
+        // Fast lerp for onboard
+        this.camera.position.lerp(camWorldPos, this.tcamLerpSpeed);
+        
+        // Look ahead along car orientation
+        const lookAheadDist = 50;
+        const lookTarget = new THREE.Vector3(
+          kartPos.x + Math.sin(angle) * lookAheadDist,
+          2.0, // Eye level
+          kartPos.z + Math.cos(angle) * lookAheadDist
+        );
+        
+        this.camera.lookAt(lookTarget);
+        
+        // Hide name label of followed kart so it doesn't block view
+        if (kart.nameSprite) kart.nameSprite.visible = false;
+        
+      } else {
+        // Chase camera: position behind the kart
+        const behindDist = 60;
+        const heightAbove = 30;
+        const lookAheadDist = 30;
 
-      const angle = kart.currentAngle || 0;
-      const camTargetX = kartPos.x - Math.sin(angle) * behindDist;
-      const camTargetZ = kartPos.z - Math.cos(angle) * behindDist;
-      const camTargetY = heightAbove;
+        const camTargetX = kartPos.x - Math.sin(angle) * behindDist;
+        const camTargetZ = kartPos.z - Math.cos(angle) * behindDist;
+        const camTargetY = heightAbove;
 
-      // Smooth interpolation
-      this.camera.position.lerp(
-        new THREE.Vector3(camTargetX, camTargetY, camTargetZ),
-        this.chaseLerpSpeed
-      );
+        // Smooth interpolation
+        this.camera.position.lerp(
+          new THREE.Vector3(camTargetX, camTargetY, camTargetZ),
+          this.chaseLerpSpeed
+        );
 
-      // Look at kart (slightly ahead)
-      const lookX = kartPos.x + Math.sin(angle) * lookAheadDist;
-      const lookZ = kartPos.z + Math.cos(angle) * lookAheadDist;
-      const lookTarget = new THREE.Vector3(lookX, 5, lookZ);
+        // Look at kart (slightly ahead)
+        const lookX = kartPos.x + Math.sin(angle) * lookAheadDist;
+        const lookZ = kartPos.z + Math.cos(angle) * lookAheadDist;
+        const lookTarget = new THREE.Vector3(lookX, 5, lookZ);
 
-      // Smooth look target
-      if (!this._chaseLookTarget) this._chaseLookTarget = lookTarget.clone();
-      this._chaseLookTarget.lerp(lookTarget, this.chaseLerpSpeed);
-      this.camera.lookAt(this._chaseLookTarget);
+        // Smooth look target
+        if (!this._chaseLookTarget) this._chaseLookTarget = lookTarget.clone();
+        this._chaseLookTarget.lerp(lookTarget, this.chaseLerpSpeed);
+        this.camera.lookAt(this._chaseLookTarget);
+        
+        // Ensure label is visible
+        if (kart.nameSprite) kart.nameSprite.visible = true;
+      }
 
     } else {
       // Isometric orbit camera

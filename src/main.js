@@ -185,12 +185,20 @@ function createZoomControls() {
     <button id="zoomIn" title="Zoom In">+</button>
     <button id="zoomOut" title="Zoom Out">−</button>
     <button id="zoomReset" title="Reset View">⟲</button>
+    <button id="camCycle" title="Cycle Camera (C)" style="margin-top: 8px; font-size: 1.2rem;">📹</button>
   `;
   container.appendChild(controlsDiv);
 
   document.getElementById('zoomIn').addEventListener('click', () => sceneManager.zoomIn());
   document.getElementById('zoomOut').addEventListener('click', () => sceneManager.zoomOut());
   document.getElementById('zoomReset').addEventListener('click', () => sceneManager.resetView());
+  document.getElementById('camCycle').addEventListener('click', () => sceneManager.cycleCameraMode());
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'c') {
+      sceneManager.cycleCameraMode();
+    }
+  });
 
   document.getElementById('fullWindowToggle').addEventListener('click', () => {
     document.getElementById('app').classList.toggle('full-window');
