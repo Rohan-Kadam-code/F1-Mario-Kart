@@ -849,16 +849,21 @@ function detectEvents(posSnapshot, raceTimeMs) {
    Render Loop — TIME-BASED playback
    ============================================ */
 let lastTimestamp = 0;
+let smoothedDelta = 16.66; // Assume 60fps start
 
 function renderLoop(timestamp) {
   requestAnimationFrame(renderLoop);
 
-  const dtMs = lastTimestamp > 0 ? (timestamp - lastTimestamp) : 0;
+  const rawDt = (lastTimestamp > 0) ? (timestamp - lastTimestamp) : 16.66;
   lastTimestamp = timestamp;
 
-  // Advance race time
+  // Smooth the clock to prevent sampling jitter (Low-pass filter)
+  // Adaptive factor 0.2 (0.8/0.2) to quickly lock onto 144Hz/240Hz monitors
+  smoothedDelta = (smoothedDelta * 0.8) + (Math.min(rawDt, 100) * 0.2);
+
+  // Advance race time using smoothed clock
   if (state.isPlaying && state.raceDuration > 0) {
-    state.currentRaceTime += dtMs * state.speed;
+    state.currentRaceTime += smoothedDelta * state.speed;
     if (state.currentRaceTime >= state.raceDuration) {
       state.currentRaceTime = state.raceDuration;
       state.isPlaying = false;

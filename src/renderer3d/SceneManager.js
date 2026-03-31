@@ -27,6 +27,7 @@ export class SceneManager {
       antialias: true,
       alpha: false,
       powerPreference: 'high-performance',
+      logarithmicDepthBuffer: true,
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -43,7 +44,7 @@ export class SceneManager {
 
     // ── Main Camera (Perspective — isometric-ish) ──
     const aspect = container.clientWidth / container.clientHeight;
-    this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 50000);
+    this.camera = new THREE.PerspectiveCamera(45, aspect, 1.0, 60000);
     this.camera.position.set(0, 800, 600);
     this.camera.lookAt(0, 0, 0);
 
@@ -51,8 +52,8 @@ export class SceneManager {
     this.cameraMode = CAMERA_MODES.ORBIT;
     this.isChaseMode = false;
     this.chaseTarget = null;       // Kart3D instance to follow
-    this.chaseLerpSpeed = 0.04;
-    this.tcamLerpSpeed = 0.15;    // Faster for onboard
+    this.chaseLerpSpeed = 0.1;    // Faster lock
+    this.tcamLerpSpeed = 0.3;     // Rock-solid onboard
 
 
     // ── Orbit state (isometric view) ──
@@ -250,17 +251,17 @@ export class SceneManager {
       this.chaseTarget = null;
       return;
     }
-    
+
     // Default to CHASE if not specified and currently in ORBIT
     if (!mode) {
       this.cameraMode = this.cameraMode === CAMERA_MODES.ORBIT ? CAMERA_MODES.CHASE : this.cameraMode;
     } else {
       this.cameraMode = mode;
     }
-    
+
     this.isChaseMode = true;
     this.chaseTarget = kart;
-    
+
     if (this.cameraMode === CAMERA_MODES.CHASE) {
       this.orbitRadius = Math.min(this.orbitRadius, 250);
       this.orbitPhi = Math.PI / 6; // Lower angle — behind the car
@@ -270,13 +271,13 @@ export class SceneManager {
   /** Cycle through available camera modes for a tracked kart */
   cycleCameraMode() {
     if (!this.isChaseMode || !this.chaseTarget) return null;
-    
+
     if (this.cameraMode === CAMERA_MODES.CHASE) {
       this.cameraMode = CAMERA_MODES.TCAM;
     } else {
       this.cameraMode = CAMERA_MODES.CHASE;
     }
-    
+
     return this.cameraMode;
   }
 
@@ -435,13 +436,13 @@ export class SceneManager {
         // Position relative to car: Above cockpit (y=2.5), looking forward (+z in car space)
         // Kart nose is at +3.8, cockpit is at -0.2
         const tcamOffset = new THREE.Vector3(0, 2.5, 0.4);
-        
+
         // Transform offset to world space
         const camWorldPos = tcamOffset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle).add(kartPos);
-        
-        // Fast lerp for onboard
-        this.camera.position.lerp(camWorldPos, this.tcamLerpSpeed);
-        
+
+        // Rigid lock-on for onboard (Zero-Latency)
+        this.camera.position.copy(camWorldPos);
+
         // Look ahead along car orientation
         const lookAheadDist = 50;
         const lookTarget = new THREE.Vector3(
@@ -449,12 +450,12 @@ export class SceneManager {
           2.0, // Eye level
           kartPos.z + Math.cos(angle) * lookAheadDist
         );
-        
+
         this.camera.lookAt(lookTarget);
-        
+
         // Hide name label of followed kart so it doesn't block view
         if (kart.nameSprite) kart.nameSprite.visible = false;
-        
+
       } else {
         // Chase camera: position behind the kart
         const behindDist = 60;
@@ -465,22 +466,16 @@ export class SceneManager {
         const camTargetZ = kartPos.z - Math.cos(angle) * behindDist;
         const camTargetY = heightAbove;
 
-        // Smooth interpolation
-        this.camera.position.lerp(
-          new THREE.Vector3(camTargetX, camTargetY, camTargetZ),
-          this.chaseLerpSpeed
-        );
+        this.camera.position.copy(new THREE.Vector3(camTargetX, camTargetY, camTargetZ));
 
         // Look at kart (slightly ahead)
         const lookX = kartPos.x + Math.sin(angle) * lookAheadDist;
         const lookZ = kartPos.z + Math.cos(angle) * lookAheadDist;
         const lookTarget = new THREE.Vector3(lookX, 5, lookZ);
 
-        // Smooth look target
-        if (!this._chaseLookTarget) this._chaseLookTarget = lookTarget.clone();
-        this._chaseLookTarget.lerp(lookTarget, this.chaseLerpSpeed);
-        this.camera.lookAt(this._chaseLookTarget);
-        
+        // Rigid look target (kart is already smoothed)
+        this.camera.lookAt(lookTarget);
+
         // Ensure label is visible
         if (kart.nameSprite) kart.nameSprite.visible = true;
       }

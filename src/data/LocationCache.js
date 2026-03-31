@@ -69,6 +69,13 @@ export class LocationCache {
     // Load existing data from IndexedDB
     await this._loadFromStorage();
 
+    // Smart Hydration: If session is already fully cached, skip API calls
+    if (this.fetchProgress >= 1.0) {
+      console.log(`[LocationCache] Session ${this.sessionKey} fully hydrated from storage. Skipping API fetches.`);
+      this.isCalibrated = true; // Assume high-fidelity data doesn't need re-calibration
+      return; 
+    }
+
     // Start fetching: first fetch calibration data, then continue in background
     await this._fetchCalibrationData();
     this._startBackgroundFetch();
@@ -139,7 +146,20 @@ export class LocationCache {
    * Fetch one lap of data for the first driver to calibrate the coordinate mapping.
    */
   async _fetchCalibrationData() {
+    // If we already have points in memory (from DB), use a clean 2-minute window for calibration
     const firstDriver = this.drivers[0];
+    const dData = this.data.get(firstDriver?.driver_number);
+    if (dData && dData.length > 50) {
+      const windowEnd = this.raceStartEpoch + 120000; // 2 minutes
+      const calibrationWindow = dData.filter(p => p.epoch <= windowEnd);
+      
+      if (calibrationWindow.length > 20) {
+        console.log(`[LocationCache] Using 2-minute hydrated window for calibration (Driver ${firstDriver.driver_number})`);
+        this._computeTransform(calibrationWindow);
+        return;
+      }
+    }
+
     if (!firstDriver) return;
 
     const windowMs = 120000; // 2 minutes of data

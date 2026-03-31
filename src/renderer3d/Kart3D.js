@@ -46,7 +46,7 @@ export class Kart3D {
 
     this._targetPos = new THREE.Vector3(0, 0, 0);
     this._currentPos = new THREE.Vector3(0, 0, 0);
-    this._lerpFactor = 0.25;      // More responsive position following
+    this._lerpFactor = 0.4;       // 'Rubber-Band' smoothing (absorbs GPS irregularities)
     this._angleLerpFactor = 0.08; // Heavier, more stable steering
   }
 
@@ -209,8 +209,9 @@ export class Kart3D {
     this.mesh.rotation.y = this.currentAngle;
 
     // Smooth the internal speed for animation and audio
-    this._smoothSpeed = (this._smoothSpeed || 0) * 0.9 + this.speed * 0.1;
-    const ws = Math.min(this._smoothSpeed, 350) * 0.005;
+    // Use an aggressive low-pass filter (0.05) to eliminate wheel flicker
+    this._smoothSpeed = (this._smoothSpeed || 0) * 0.95 + this.speed * 0.05;
+    const ws = Math.min(this._smoothSpeed, 400) * 0.005;
     for (const w of this.wheels) w.rotation.x += ws;
 
     this._updateTrail();
