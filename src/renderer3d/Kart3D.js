@@ -46,7 +46,7 @@ export class Kart3D {
 
     this._targetPos = new THREE.Vector3(0, 0, 0);
     this._currentPos = new THREE.Vector3(0, 0, 0);
-    this._lerpFactor = 0.12;
+    this._lerpFactor = 0.25;  // More responsive following
   }
 
   _buildKart() {

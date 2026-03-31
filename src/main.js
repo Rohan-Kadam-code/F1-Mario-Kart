@@ -897,13 +897,21 @@ function renderLoop(timestamp) {
         const realPos = cache.getDriverPosition(driverNum, currentEpoch);
         if (realPos) {
           const world = sceneManager.toWorldCoords(realPos.x, realPos.y);
+          
+          // Get smooth orientation from spline tangent
+          const tangent = cache.getDriverTangent(driverNum, currentEpoch);
+          let angle = kart.currentAngle;
+          if (tangent) {
+            angle = Math.atan2(tangent.x, -tangent.y); // Flip Y back for tangent space
+          }
+
+          // More robust speed from spline derivative
           const dx = world.x - kart.mesh.position.x;
           const dz = world.z - kart.mesh.position.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
-          const newSpeed = dist * 25;
-          kart.speed = (kart.speed * 0.8) + (newSpeed * 0.2);
-          const angle = (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01)
-            ? Math.atan2(dx, dz) : kart.currentAngle;
+          const newSpeed = dist * (60 / Math.max(state.speed, 0.1)); // Approx speed in units/sec
+          kart.speed = (kart.speed * 0.9) + (newSpeed * 0.1);
+
           kart.updatePosition(world.x, 0, world.z, angle);
           kart.progress = 0;
 

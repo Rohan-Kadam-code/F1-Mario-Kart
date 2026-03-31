@@ -391,44 +391,126 @@ export class LocationCache {
 
   /**
    * Get a driver's transformed position at a given epoch time.
-   * Returns {x, y} in track-projected coordinates, or null if no data.
+   * Uses Catmull-Rom (Cubic Hermite) spline interpolation for ultra-smooth movement.
+   * @param {number} driverNumber
+   * @param {number} epochMs
+   * @returns {{x, y}} track-projected coordinates
    */
   getDriverPosition(driverNumber, epochMs) {
     if (!this.isCalibrated) return null;
 
-    const driverData = this.data.get(driverNumber);
-    if (!driverData || driverData.length === 0) return null;
+    const data = this.data.get(driverNumber);
+    if (!data || data.length === 0) return null;
 
-    // Binary search for the closest time entry
-    let lo = 0, hi = driverData.length - 1;
+    // Linear fallback if only 1-2 points
+    if (data.length < 3) {
+      return this._getLinearPosition(data, epochMs);
+    }
 
-    // Quick bounds check
-    if (epochMs <= driverData[0].epoch) {
-      return this.applyTransform(driverData[0].x, driverData[0].y);
+    // Binary search for i1 where data[i1].epoch >= epochMs
+    let lo = 0, hi = data.length - 1;
+    if (epochMs <= data[0].epoch) return this.applyTransform(data[0].x, data[0].y);
+    if (epochMs >= data[hi].epoch) return this.applyTransform(data[hi].x, data[hi].y);
+
+    while (lo < hi) {
+       const mid = (lo + hi) >> 1;
+       if (data[mid].epoch < epochMs) lo = mid + 1;
+       else hi = mid;
     }
-    if (epochMs >= driverData[hi].epoch) {
-      return this.applyTransform(driverData[hi].x, driverData[hi].y);
-    }
+    const i1 = lo;
+    const i0 = i1 - 1;
+
+    // Catmull-Rom needs 4 points: i-1, i, i+1, i+2
+    // We use indices: i_m1, i0, i1, i2
+    const i_m1 = Math.max(0, i0 - 1);
+    const i2 = Math.min(data.length - 1, i1 + 1);
+
+    const p_m1 = data[i_m1];
+    const p0 = data[i0];
+    const p1 = data[i1];
+    const p2 = data[i2];
+
+    const t = (epochMs - p0.epoch) / (p1.epoch - p0.epoch || 1);
+    
+    // Spline interpolation
+    const rawX = this._catmullRom(p_m1.x, p0.x, p1.x, p2.x, t);
+    const rawY = this._catmullRom(p_m1.y, p0.y, p1.y, p2.y, t);
+
+    return this.applyTransform(rawX, rawY);
+  }
+
+  /**
+   * Get the tangent (forward vector) of the driver's path at epochMs.
+   * Useful for smooth steering.
+   */
+  getDriverTangent(driverNumber, epochMs) {
+    const data = this.data.get(driverNumber);
+    if (!data || data.length < 2) return null;
+
+    let lo = 0, hi = data.length - 1;
+    if (epochMs <= data[0].epoch) epochMs = data[0].epoch + 1;
+    if (epochMs >= data[hi].epoch) epochMs = data[hi].epoch - 1;
 
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (driverData[mid].epoch < epochMs) lo = mid + 1;
+      if (data[mid].epoch < epochMs) lo = mid + 1;
       else hi = mid;
     }
-
     const i1 = lo;
-    const i0 = Math.max(0, lo - 1);
+    const i0 = i1 - 1;
 
-    // Interpolate between the two nearest points
-    const p0 = driverData[i0];
-    const p1 = driverData[i1];
-    const dt = p1.epoch - p0.epoch;
-    const t = dt > 0 ? (epochMs - p0.epoch) / dt : 0;
+    const p0 = data[i0];
+    const p1 = data[i1];
+    const t = (epochMs - p0.epoch) / (p1.epoch - p0.epoch || 1);
 
-    const rawX = p0.x + (p1.x - p0.x) * t;
-    const rawY = p0.y + (p1.y - p0.y) * t;
+    // Tangent is the derivative of the spline
+    const i_m1 = Math.max(0, i0 - 1);
+    const i2 = Math.min(data.length - 1, i1 + 1);
+    
+    const tx = this._catmullRomTangent(data[i_m1].x, data[i0].x, data[i1].x, data[i2].x, t);
+    const ty = this._catmullRomTangent(data[i_m1].y, data[i0].y, data[i1].y, data[i2].y, t);
 
-    return this.applyTransform(rawX, rawY);
+    // Transform vector (only rotation/scale, no translation)
+    if (!this.transform) return { x: p1.x - p0.x, y: p1.y - p0.y };
+    const { cosA, sinA, flipMult, scaleX, scaleY } = this.transform;
+    const sx = tx * scaleX;
+    const sy = ty * flipMult * scaleY;
+    return {
+      x: sx * cosA - sy * sinA,
+      y: sx * sinA + sy * cosA
+    };
+  }
+
+  _catmullRom(p0, p1, p2, p3, t) {
+    const v0 = (p2 - p0) * 0.5;
+    const v1 = (p3 - p1) * 0.5;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1;
+  }
+
+  _catmullRomTangent(p0, p1, p2, p3, t) {
+    const v0 = (p2 - p0) * 0.5;
+    const v1 = (p3 - p1) * 0.5;
+    const t2 = t * t;
+    return 3 * (2 * p1 - 2 * p2 + v0 + v1) * t2 + 2 * (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t + v0;
+  }
+
+  _getLinearPosition(driverData, epochMs) {
+    if (epochMs <= driverData[0].epoch) return this.applyTransform(driverData[0].x, driverData[0].y);
+    const hi = driverData.length - 1;
+    if (epochMs >= driverData[hi].epoch) return this.applyTransform(driverData[hi].x, driverData[hi].y);
+    
+    let lo = 0, h = hi;
+    while (lo < h) {
+      const mid = (lo + h) >> 1;
+      if (driverData[mid].epoch < epochMs) lo = mid + 1;
+      else h = mid;
+    }
+    const p1 = driverData[lo];
+    const p0 = driverData[lo - 1];
+    const t = (epochMs - p0.epoch) / (p1.epoch - p0.epoch || 1);
+    return this.applyTransform(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t);
   }
 
   /**
