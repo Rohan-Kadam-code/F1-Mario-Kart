@@ -12,6 +12,7 @@
  */
 
 import * as api from '../api/openf1.js';
+import * as db from './db.js';
 
 export class LocationCache {
   constructor() {
@@ -65,9 +66,61 @@ export class LocationCache {
       this.data.set(d.driver_number, []);
     }
 
+    // Load existing data from IndexedDB
+    await this._loadFromStorage();
+
     // Start fetching: first fetch calibration data, then continue in background
     await this._fetchCalibrationData();
     this._startBackgroundFetch();
+  }
+
+  /**
+   * Load previously cached telemetry from IndexedDB.
+   */
+  async _loadFromStorage() {
+    if (!this.sessionKey) return;
+    console.log(`[LocationCache] Checking local storage for session ${this.sessionKey}...`);
+    
+    try {
+      const keys = await db.getSessionLocationKeys(this.sessionKey);
+      if (keys.length === 0) return;
+
+      let pointsLoaded = 0;
+      let latestEpoch = this.raceStartEpoch;
+
+      for (const key of keys) {
+        const chunk = await db.getLocationChunkCache(key);
+        if (chunk && chunk.locations) {
+          for (const loc of chunk.locations) {
+            const dNum = loc.driver_number;
+            let dData = this.data.get(dNum);
+            if (!dData) {
+              dData = [];
+              this.data.set(dNum, dData);
+            }
+            dData.push({
+              epoch: loc.epoch,
+              x: loc.x,
+              y: loc.y
+            });
+            if (loc.epoch > latestEpoch) latestEpoch = loc.epoch;
+            pointsLoaded++;
+          }
+        }
+      }
+
+      // Sort all driver data
+      for (const dData of this.data.values()) {
+        dData.sort((a, b) => a.epoch - b.epoch);
+      }
+
+      this.totalPoints = pointsLoaded;
+      this.fetchedUpTo = Math.min(latestEpoch, this.raceEndEpoch);
+      this.fetchProgress = (this.fetchedUpTo - this.raceStartEpoch) / (this.raceEndEpoch - this.raceStartEpoch || 1);
+      console.log(`[LocationCache] Successfully re-hydrated ${pointsLoaded} points from storage. Resume from: ${new Date(this.fetchedUpTo).toLocaleTimeString()}`);
+    } catch (e) {
+      console.warn('[LocationCache] Storage load failed:', e);
+    }
   }
 
   /** Stop background fetching */
@@ -328,7 +381,7 @@ export class LocationCache {
      ============================================= */
 
   _startBackgroundFetch() {
-    // Fetch data in 30-second chunks every 2 seconds
+    // Fetch data in larger chunks every second to quickly cache the whole race
     this.fetchIntervalId = setInterval(() => {
       if (this.isFetching) return;
       if (this.fetchedUpTo >= this.raceEndEpoch) {
@@ -336,16 +389,16 @@ export class LocationCache {
         clearInterval(this.fetchIntervalId);
         this.fetchIntervalId = null;
         this.fetchProgress = 1;
-        console.log(`[LocationCache] All data fetched. Total: ${this.totalPoints} points`);
+        console.log(`[LocationCache] Full session cached successfully. Total: ${this.totalPoints} points`);
         return;
       }
       this._fetchNextChunk();
-    }, 2000);
+    }, 1000); // Faster interval for deep-caching
   }
 
   async _fetchNextChunk() {
     this.isFetching = true;
-    const chunkMs = 30000; // 30-second chunks
+    const chunkMs = 300000; // 5-minute chunks for faster retrieval
     const chunkStart = this.fetchedUpTo;
     const chunkEnd = Math.min(chunkStart + chunkMs, this.raceEndEpoch);
 
@@ -353,33 +406,46 @@ export class LocationCache {
     const dateEnd = new Date(chunkEnd).toISOString();
 
     try {
-      // Fetch for ALL drivers at once (no driver_number filter) to get all positions
       const locations = await api.getLocationsAll(this.sessionKey, dateStart, dateEnd);
 
       if (locations && locations.length > 0) {
+        const chunkData = [];
         for (const loc of locations) {
           if (loc.x === undefined || loc.y === undefined) continue;
+          
+          const epoch = new Date(loc.date).getTime();
           const driverNum = loc.driver_number;
+          
+          // Prepare for memory
           let driverData = this.data.get(driverNum);
           if (!driverData) {
             driverData = [];
             this.data.set(driverNum, driverData);
           }
-          driverData.push({
-            epoch: new Date(loc.date).getTime(),
-            x: loc.x,
-            y: loc.y,
-          });
+          const p = { epoch, x: loc.x, y: loc.y };
+          driverData.push(p);
+
+          // Prepare for DB
+          chunkData.push({ driver_number: driverNum, ...p });
         }
+        
         this.totalPoints += locations.length;
+
+        // Persist to IndexedDB
+        const chunkKey = `loc_${this.sessionKey}_${chunkStart}`;
+        await db.setLocationChunkCache(chunkKey, {
+          sessionKey: this.sessionKey,
+          startEpoch: chunkStart,
+          endEpoch: chunkEnd,
+          locations: chunkData
+        });
       }
 
       this.fetchedUpTo = chunkEnd;
-      this.fetchProgress = (chunkEnd - this.raceStartEpoch) / (this.raceEndEpoch - this.raceStartEpoch);
+      this.fetchProgress = (chunkEnd - this.raceStartEpoch) / (this.raceEndEpoch - this.raceStartEpoch || 1);
     } catch (e) {
       console.warn('[LocationCache] Chunk fetch error:', e);
-      // Retry by not advancing fetchedUpTo, but wait a bit longer
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 5000));
     } finally {
       this.isFetching = false;
     }
@@ -479,6 +545,46 @@ export class LocationCache {
       x: sx * cosA - sy * sinA,
       y: sx * sinA + sy * cosA
     };
+  }
+
+  /**
+   * Get the absolute speed of the driver at epochMs.
+   * Magnitude of the path tangent (spline derivative).
+   */
+  getDriverSpeed(driverNumber, epochMs) {
+    const data = this.data.get(driverNumber);
+    if (!data || data.length < 2) return 0;
+
+    let lo = 0, hi = data.length - 1;
+    if (epochMs <= data[0].epoch) epochMs = data[0].epoch + 1;
+    if (epochMs >= data[hi].epoch) epochMs = data[hi].epoch - 1;
+
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (data[mid].epoch < epochMs) lo = mid + 1;
+      else hi = mid;
+    }
+    const i1 = lo;
+    const i0 = i1 - 1;
+
+    const p0 = data[i0];
+    const p1 = data[i1];
+    const dt = p1.epoch - p0.epoch || 1;
+    const t = (epochMs - p0.epoch) / dt;
+
+    const i_m1 = Math.max(0, i0 - 1);
+    const i2 = Math.min(data.length - 1, i1 + 1);
+
+    const tx = this._catmullRomTangent(data[i_m1].x, data[i0].x, data[i1].x, data[i2].x, t);
+    const ty = this._catmullRomTangent(data[i_m1].y, data[i0].y, data[i1].y, data[i2].y, t);
+
+    // Magnitude in untransformed units per ms
+    const rawSpeed = Math.sqrt(tx * tx + ty * ty) / dt;
+
+    // Apply average scale factor for world units (approximation)
+    if (!this.transform) return rawSpeed * 1000;
+    const avgScale = (this.transform.scaleX + this.transform.scaleY) * 0.5;
+    return rawSpeed * avgScale * 1000; // Speed in units/sec
   }
 
   _catmullRom(p0, p1, p2, p3, t) {

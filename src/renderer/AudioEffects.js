@@ -191,7 +191,7 @@ export class AudioEffects {
       baseGain = 0.35; // Heavy braking "Muffled"
     }
     
-    this.engineGain.gain.setTargetAtTime(baseGain, this.ctx.currentTime, 0.1);
+    this.engineGain.gain.setTargetAtTime(baseGain, this.ctx.currentTime, 0.25);
     
     // --- Dynamic Pitch (RPM Simulation) ---
     // At high speeds (>220 km/h), simulate engine redline
@@ -201,6 +201,6 @@ export class AudioEffects {
       rate += (speedValue - 220) / 400; 
     }
     
-    this.engineSource.playbackRate.setTargetAtTime(rate, this.ctx.currentTime, 0.15);
+    this.engineSource.playbackRate.setTargetAtTime(rate, this.ctx.currentTime, 0.25);
   }
 }

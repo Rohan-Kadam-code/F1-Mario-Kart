@@ -172,6 +172,7 @@ function init() {
 
   createZoomControls();
   createQualityControls();
+  createCacheIndicator();
 
   requestAnimationFrame(renderLoop);
   drawWelcomeScreen();
@@ -225,6 +226,19 @@ function createQualityControls() {
     div.querySelectorAll('button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
   });
+}
+
+function createCacheIndicator() {
+  const container = document.getElementById('canvasContainer');
+  const div = document.createElement('div');
+  div.id = 'cacheIndicator';
+  div.className = 'cache-indicator hidden';
+  div.innerHTML = `
+    <div class="cache-info">Telemetry Cache</div>
+    <div class="cache-bar"><div id="cacheBarFill"></div></div>
+    <div id="cachePercentage">0%</div>
+  `;
+  container.appendChild(div);
 }
 
 function drawWelcomeScreen() {
@@ -853,6 +867,25 @@ function renderLoop(timestamp) {
     }
   }
 
+  // Update Cache indicator
+  const cacheIndicator = document.getElementById('cacheIndicator');
+  if (state.locationCache && state.locationCache.sessionKey) {
+    cacheIndicator.classList.remove('hidden');
+    const pct = Math.round(state.locationCache.fetchProgress * 100);
+    const fill = document.getElementById('cacheBarFill');
+    const text = document.getElementById('cachePercentage');
+    if (fill) fill.style.width = `${pct}%`;
+    if (text) text.innerText = `${pct}%`;
+    
+    if (pct >= 100) {
+      setTimeout(() => cacheIndicator.classList.add('cached'), 500);
+    } else {
+      cacheIndicator.classList.remove('cached');
+    }
+  } else {
+    cacheIndicator.classList.add('hidden');
+  }
+
   // Get position snapshot
   const posSnapshot = getPositionSnapshot(state.currentRaceTime);
 
@@ -898,19 +931,23 @@ function renderLoop(timestamp) {
         if (realPos) {
           const world = sceneManager.toWorldCoords(realPos.x, realPos.y);
           
-          // Get smooth orientation from spline tangent
-          const tangent = cache.getDriverTangent(driverNum, currentEpoch);
+          // Stable orientation from dual-sampling tangent (Current + Look-ahead)
+          const tangentCurrent = cache.getDriverTangent(driverNum, currentEpoch);
+          const tangentFuture = cache.getDriverTangent(driverNum, currentEpoch + 250); // 250ms look-ahead
+          
           let angle = kart.currentAngle;
-          if (tangent) {
-            angle = Math.atan2(tangent.x, -tangent.y); // Flip Y back for tangent space
+          if (tangentCurrent && tangentFuture) {
+            // Average tangents for predictive smoothing
+            const tx = (tangentCurrent.x + tangentFuture.x) * 0.5;
+            const ty = (tangentCurrent.y + tangentFuture.y) * 0.5;
+            angle = Math.atan2(tx, -ty);
+          } else if (tangentCurrent) {
+            angle = Math.atan2(tangentCurrent.x, -tangentCurrent.y);
           }
 
-          // More robust speed from spline derivative
-          const dx = world.x - kart.mesh.position.x;
-          const dz = world.z - kart.mesh.position.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          const newSpeed = dist * (60 / Math.max(state.speed, 0.1)); // Approx speed in units/sec
-          kart.speed = (kart.speed * 0.9) + (newSpeed * 0.1);
+          // Direct speed from spline derivative
+          const s = cache.getDriverSpeed(driverNum, currentEpoch);
+          kart.speed = (kart.speed * 0.8) + (s * 0.2); // Light smoothing
 
           kart.updatePosition(world.x, 0, world.z, angle);
           kart.progress = 0;

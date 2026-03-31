@@ -46,7 +46,8 @@ export class Kart3D {
 
     this._targetPos = new THREE.Vector3(0, 0, 0);
     this._currentPos = new THREE.Vector3(0, 0, 0);
-    this._lerpFactor = 0.25;  // More responsive following
+    this._lerpFactor = 0.25;      // More responsive position following
+    this._angleLerpFactor = 0.08; // Heavier, more stable steering
   }
 
   _buildKart() {
@@ -204,10 +205,12 @@ export class Kart3D {
     let ad = this.targetAngle - this.currentAngle;
     while (ad > Math.PI) ad -= Math.PI * 2;
     while (ad < -Math.PI) ad += Math.PI * 2;
-    this.currentAngle += ad * this._lerpFactor;
+    this.currentAngle += ad * this._angleLerpFactor;
     this.mesh.rotation.y = this.currentAngle;
 
-    const ws = Math.min(this.speed, 350) * 0.005;
+    // Smooth the internal speed for animation and audio
+    this._smoothSpeed = (this._smoothSpeed || 0) * 0.9 + this.speed * 0.1;
+    const ws = Math.min(this._smoothSpeed, 350) * 0.005;
     for (const w of this.wheels) w.rotation.x += ws;
 
     this._updateTrail();
