@@ -1084,10 +1084,16 @@ function renderLoop(timestamp) {
     if (state.trackedDriver) {
       const trackedSprite = state.sprites.get(state.trackedDriver);
       if (trackedSprite) {
-        audioController.updateEngine(trackedSprite.speed, state.isPlaying);
+        // Calculate acceleration (deltaSpeed) for more realistic throttle sound
+        // We use speed from the previous frame to detect load (accelerating/braking)
+        const lastSpeed = trackedSprite.lastSpeed ?? trackedSprite.speed;
+        const deltaSpeed = trackedSprite.speed - lastSpeed;
+        trackedSprite.lastSpeed = trackedSprite.speed; // Store for next frame
+
+        audioController.updateEngine(trackedSprite.speed, deltaSpeed, state.isPlaying);
       }
     } else {
-      audioController.updateEngine(0, false);
+      audioController.updateEngine(0, 0, false);
     }
   }
 

@@ -8,6 +8,12 @@ export class AudioEffects {
     this.ctx = null;
     this.enabled = true;
     this.masterGain = null;
+    
+    // Engine sound state
+    this.engineBuffer = null;
+    this.engineSource = null;
+    this.engineGain = null;
+    this.isEngineLoading = false;
   }
 
   /** Initialize on first user interaction to comply with browser autoplay policies */
@@ -17,23 +23,58 @@ export class AudioEffects {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AudioContext();
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 0.3; // Default volume 30%
+      this.masterGain.gain.value = 0.6;// Boosted from 0.3
       this.masterGain.connect(this.ctx.destination);
 
-      // Setup continuous car engine
-      this.engineOsc = this.ctx.createOscillator();
-      this.engineGain = this.ctx.createGain();
-      this.engineOsc.type = 'sawtooth';
-      this.engineOsc.frequency.setValueAtTime(40, this.ctx.currentTime);
-      this.engineGain.gain.setValueAtTime(0, this.ctx.currentTime); // Start silent
-      
-      this.engineOsc.connect(this.engineGain);
-      this.engineGain.connect(this.masterGain);
-      this.engineOsc.start();
+      // Load the real engine sample
+      this._loadEngineSound();
     } catch (e) {
       console.warn('Web Audio API not supported', e);
       this.enabled = false;
     }
+  }
+
+  async _loadEngineSound() {
+    if (this.isEngineLoading || this.engineBuffer) return;
+    this.isEngineLoading = true;
+    
+    try {
+      console.log('[AudioEffects] Loading high-fidelity engine sound...');
+      // IMPORTANT: The path is relative to the root/src depending on the dev server config
+      // User provided d:\Work\OpenF1\src\do_what_you_want-f1-racing-car-sound-430459.mp3
+      // We'll try the relative path from the app root
+      const response = await fetch('/src/do_what_you_want-f1-racing-car-sound-430459.mp3');
+      const arrayBuffer = await response.arrayBuffer();
+      this.engineBuffer = await this.ctx.decodeAudioData(arrayBuffer);
+      
+      this._startEngineLoop();
+      console.log('[AudioEffects] Engine sample loaded and looping.');
+    } catch (e) {
+      console.error('[AudioEffects] Failed to load engine MP3:', e);
+    } finally {
+      this.isEngineLoading = false;
+    }
+  }
+
+  _startEngineLoop() {
+    if (!this.engineBuffer || !this.ctx) return;
+    
+    // Stop existing if any
+    if (this.engineSource) {
+      try { this.engineSource.stop(); } catch(e) {}
+    }
+
+    this.engineSource = this.ctx.createBufferSource();
+    this.engineSource.buffer = this.engineBuffer;
+    this.engineSource.loop = true;
+    
+    this.engineGain = this.ctx.createGain();
+    this.engineGain.gain.setValueAtTime(0, this.ctx.currentTime); // Start silent
+    
+    this.engineSource.connect(this.engineGain);
+    this.engineGain.connect(this.masterGain);
+    
+    this.engineSource.start(0);
   }
 
   toggle(enabled) {
@@ -132,16 +173,34 @@ export class AudioEffects {
     noiseSource.start();
   }
 
-  /** Update continuous car engine pitch based on speed */
-  updateEngine(speedValue, isPlaying) {
-    if (!this.enabled || !this.ctx || !this.engineOsc) return;
+  /** Update continuous car engine pitch based on speed and load (acceleration) */
+  updateEngine(speedValue, deltaSpeed = 0, isPlaying) {
+    if (!this.enabled || !this.ctx || !this.engineSource || !this.engineGain) return;
     
-    // Engine sound only follows the tracked driver or if moving
-    const targetGain = (isPlaying && speedValue > 5) ? 0.06 : 0; 
-    this.engineGain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.1);
+    // Engine sound only follows the tracked driver
+    if (!isPlaying || speedValue < 2) {
+      this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
+      return;
+    }
+
+    // --- Dynamic Load (Volume) Scaling ---
+    let baseGain = 0.5; // Default cruising volume
+    if (deltaSpeed > 0.6) {
+      baseGain = 0.85; // Heavy acceleration "Roar"
+    } else if (deltaSpeed < -1.5) {
+      baseGain = 0.35; // Heavy braking "Muffled"
+    }
     
-    // Scale pitch: idle at 40Hz, high speed at ~250Hz
-    const freq = 40 + (speedValue * 0.6);
-    this.engineOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.1);
+    this.engineGain.gain.setTargetAtTime(baseGain, this.ctx.currentTime, 0.1);
+    
+    // --- Dynamic Pitch (RPM Simulation) ---
+    // At high speeds (>220 km/h), simulate engine redline
+    let rate = 0.4 + (speedValue / 350) * 1.4;
+    if (speedValue > 220) {
+      // Add more piercing pitch at the end of the straight
+      rate += (speedValue - 220) / 400; 
+    }
+    
+    this.engineSource.playbackRate.setTargetAtTime(rate, this.ctx.currentTime, 0.15);
   }
 }
