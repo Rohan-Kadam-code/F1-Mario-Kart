@@ -1,16 +1,20 @@
 /**
- * F1 Mario Kart Visualiser — Main Entry Point
+ * F1 Mario Kart Visualiser — Main Entry Point (Three.js 3D Edition)
  * Orchestrates data loading, timeline playback, rendering, and Mario Kart effects.
  *
  * Key design decisions for correctness:
  * - Playback is TIME-BASED: 1x speed = 1 second of race per 1 second real time
  * - Driver positions use per-driver lap-time interpolation from the laps API
  * - Track shape is extracted as a single clean lap from location data
+ * - Rendering is powered by Three.js (SceneManager, Track3D, Kart3D, Particles3D, Environment3D)
  */
 
-import { TrackRenderer } from './renderer/TrackRenderer.js';
-import { DriverSprite, getTeamColor } from './renderer/DriverSprite.js';
-import { ParticleSystem } from './renderer/ParticleSystem.js';
+import { SceneManager } from './renderer3d/SceneManager.js';
+import { Track3D } from './renderer3d/Track3D.js';
+import { Kart3D } from './renderer3d/Kart3D.js';
+import { Particles3D } from './renderer3d/Particles3D.js';
+import { Environment3D } from './renderer3d/Environment3D.js';
+import { getTeamColor } from './renderer/DriverSprite.js';
 import { AudioEffects } from './renderer/AudioEffects.js';
 import { MarioEffects, EFFECT_TYPES } from './renderer/MarioEffects.js';
 import { SessionSelector } from './components/SessionSelector.js';
@@ -27,50 +31,42 @@ import { LocationCache } from './data/LocationCache.js';
 const state = {
   session: null,
   drivers: [],
-  positions: [],          // sorted position records [{ date, driver_number, position }]
-  laps: [],               // lap records from API
+  positions: [],
+  laps: [],
   stints: [],
   weather: [],
   raceControl: [],
   intervals: [],
   pitStops: [],
-
-  // Per-driver lap timing: Map<driverNumber, [{lap, startTime, endTime, duration}]>
   driverLapTimes: new Map(),
-
-  // Race timeline (time-based)
-  raceStartTime: 0,       // epoch ms of first position record
-  raceEndTime: 0,          // epoch ms of last position record
-  raceDuration: 0,         // total race duration in ms
-  currentRaceTime: 0,      // current playback time offset from raceStartTime (ms)
-
+  raceStartTime: 0,
+  raceEndTime: 0,
+  raceDuration: 0,
+  currentRaceTime: 0,
   isPlaying: false,
   speed: 1,
   totalLaps: 0,
   currentLap: 0,
-
-  // Sprites
-  sprites: new Map(),     // driverNumber -> DriverSprite
-
-  // Track shape from first driver's location data
+  karts: new Map(),       // driverNumber → Kart3D
   trackShape: [],
-
-  // Location cache for real car positions
   locationCache: new LocationCache(),
-
-  // Event detection
   lastPositionMap: new Map(),
-  lastIntervalMap: new Map(), // driverNumber -> last recorded interval value
+  lastIntervalMap: new Map(),
   fastestLapTime: Infinity,
   fastestLapDriver: null,
   detectedEvents: new Set(),
   trackedDriver: null,
+
+  // 2D track points (from TrackRenderer path) for fallback positioning
+  trackPoints2D: [],
+  trackLengths: [],
+  totalLength: 0,
 };
 
 /* ============================================
    DOM References
    ============================================ */
-const canvas = document.getElementById('raceTrack');
+const container3D = document.getElementById('raceTrack3D');
 const overlay = document.getElementById('effectOverlay');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const loaderFill = document.getElementById('loaderFill');
@@ -79,10 +75,44 @@ const eventFeed = document.getElementById('eventFeed');
 /* ============================================
    Core Systems
    ============================================ */
-const trackRenderer = new TrackRenderer(canvas);
-const particles = new ParticleSystem();
+const sceneManager = new SceneManager(container3D);
+const track3D = new Track3D(sceneManager.scene);
+const particles3D = new Particles3D(sceneManager.scene);
+const environment3D = new Environment3D(sceneManager.scene);
+
+sceneManager.track3D = track3D;
+sceneManager.environment3D = environment3D;
+sceneManager.particles3D = particles3D;
+
+// Audio and Mario effects remain DOM/canvas-based
 const audioController = new AudioEffects();
-const marioEffects = new MarioEffects(overlay, particles, eventFeed, audioController);
+
+// MarioEffects needs a 2D canvas for the particles arg, but we can pass a
+// lightweight adapter that routes particle calls to Particles3D
+const particleAdapter = {
+  emitBoost(cx, cy, color, count) {
+    // Convert screen coords to approx world coords is complex;
+    // for simplicity, use the tracked kart's 3D position or center
+    // In practice these fire alongside kart position updates so we
+    // re-emit in detectEvents with 3D coords
+  },
+  emitSpotlight(cx, cy, color) {},
+  emitExplosion(cx, cy, count) {},
+  emitConfetti(canvasWidth, count) {
+    particles3D.emitConfetti(sceneManager.trackBounds, count);
+  },
+  emitRain(w, h, count) {
+    particles3D.emitRain(sceneManager.trackBounds, count);
+  },
+  emitSmoke(cx, cy, count) {},
+  emitStarSparkle(cx, cy) {},
+  update() { particles3D.update(); },
+  draw() {}, // No-op — Three.js renders automatically
+  clear() { particles3D.clear(); },
+  get count() { return particles3D.count; },
+};
+
+const marioEffects = new MarioEffects(overlay, particleAdapter, eventFeed, audioController);
 
 const sessionSelector = new SessionSelector(
   document.getElementById('sessionSelectorContainer'),
@@ -98,22 +128,15 @@ const driverPanel = new DriverPanel(
 function toggleDriverTracking(driverNum) {
   if (state.trackedDriver === driverNum) {
     state.trackedDriver = null;
-    trackRenderer.trackingX = null;
-    trackRenderer.trackingY = null;
+    sceneManager.followKart(null);
   } else {
     state.trackedDriver = driverNum;
-    // Auto-zoom in slightly if we aren't already
-    if (trackRenderer.zoom < 2.5) trackRenderer.zoom = 2.5;
+    const kart = state.karts.get(driverNum);
+    if (kart) sceneManager.followKart(kart);
   }
   driverPanel.setTrackedDriver(state.trackedDriver);
-
-  // Clear all cached sprite trails because sudden zoom/panning breaks point coherence
-  for (const sprite of state.sprites.values()) {
-    sprite.trail = [];
-  }
 }
 
-// Clear tracking if user manually drags canvas
 window.addEventListener('track-pan-break', () => {
   if (state.trackedDriver !== null) {
     state.trackedDriver = null;
@@ -134,11 +157,8 @@ const raceInfo = new RaceInfo(
    Initialise
    ============================================ */
 function init() {
-  resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
-
-  playbackControls.onPlay = () => { 
-    state.isPlaying = true; 
+  playbackControls.onPlay = () => {
+    state.isPlaying = true;
     audioController.init();
   };
   playbackControls.onPause = () => { state.isPlaying = false; };
@@ -150,14 +170,13 @@ function init() {
   };
   playbackControls.onSpeedChange = (speed) => { state.speed = speed; };
 
-  // Zoom controls
   createZoomControls();
+  createQualityControls();
 
   requestAnimationFrame(renderLoop);
   drawWelcomeScreen();
 }
 
-/** Create zoom +/- and reset buttons overlaid on the canvas container */
 function createZoomControls() {
   const container = document.getElementById('canvasContainer');
   const controlsDiv = document.createElement('div');
@@ -169,46 +188,40 @@ function createZoomControls() {
   `;
   container.appendChild(controlsDiv);
 
-  document.getElementById('zoomIn').addEventListener('click', () => trackRenderer.zoomIn());
-  document.getElementById('zoomOut').addEventListener('click', () => trackRenderer.zoomOut());
-  document.getElementById('zoomReset').addEventListener('click', () => trackRenderer.resetView());
+  document.getElementById('zoomIn').addEventListener('click', () => sceneManager.zoomIn());
+  document.getElementById('zoomOut').addEventListener('click', () => sceneManager.zoomOut());
+  document.getElementById('zoomReset').addEventListener('click', () => sceneManager.resetView());
 
   document.getElementById('fullWindowToggle').addEventListener('click', () => {
     document.getElementById('app').classList.toggle('full-window');
-    setTimeout(() => resizeCanvas(), 50); // Small delay to let CSS transition finish
+    setTimeout(() => sceneManager.resize(), 50);
   });
 }
 
-function resizeCanvas() {
-  trackRenderer.resize();
+function createQualityControls() {
+  const container = document.getElementById('canvasContainer');
+  const div = document.createElement('div');
+  div.className = 'quality-toggle';
+  div.innerHTML = `
+    <button data-q="low">Low</button>
+    <button data-q="medium">Med</button>
+    <button data-q="high" class="active">High</button>
+  `;
+  container.appendChild(div);
+
+  div.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const q = btn.dataset.q;
+    sceneManager.setQuality(q);
+    div.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
 }
 
 function drawWelcomeScreen() {
-  const ctx = trackRenderer.ctx;
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-
-  ctx.fillStyle = '#0f0f14';
-  ctx.fillRect(0, 0, w, h);
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-  ctx.lineWidth = 1;
-  for (let x = 0; x < w; x += 40) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-  }
-  for (let y = 0; y < h; y += 40) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-  }
-
-  ctx.font = '800 2.5rem "Outfit", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#fff';
-  ctx.fillText('🏎️  F1 Mario Kart Visualiser', w / 2, h / 2 - 30);
-
-  ctx.font = '400 1rem "Outfit", sans-serif';
-  ctx.fillStyle = '#666';
-  ctx.fillText('Select a year, meeting, and session above to begin', w / 2, h / 2 + 20);
-  ctx.fillText('Powered by OpenF1 API', w / 2, h / 2 + 50);
+  // The 3D scene shows the empty environment as a "welcome" state
+  // We can add a text sprite
 }
 
 /* ============================================
@@ -245,14 +258,20 @@ async function onSessionSelected(session) {
 
     updateLoadProgress(50);
 
-    // --- Track Loading: Try circuit database first, then fallback to telemetry ---
+    // --- Track Loading ---
+    let trackPoints2D = [];
+    let pitLanePoints2D = [];
     const matchedCircuit = findCircuit(session);
+
     if (matchedCircuit) {
       console.log(`✅ Matched circuit: ${matchedCircuit.name} (${matchedCircuit.id})`);
-      trackRenderer.setCircuitData(matchedCircuit);
+      // Project lat/lng to 2D for the scene manager
+      trackPoints2D = matchedCircuit.trackCoords.map(([lng, lat]) => projectLatLng(lng, lat));
+      if (matchedCircuit.pitLane && matchedCircuit.pitLane.length > 2) {
+        pitLanePoints2D = matchedCircuit.pitLane.map(([lng, lat]) => projectLatLng(lng, lat));
+      }
       state.trackShape = matchedCircuit.trackCoords;
     } else {
-      // Fallback: fetch location data from OpenF1 API for one lap
       console.log('No circuit match in database — falling back to telemetry track shape');
       const firstDriver = drivers[0];
       if (firstDriver) {
@@ -272,35 +291,41 @@ async function onSessionSelected(session) {
             dateEnd = new Date(new Date(dateStart).getTime() + 120000).toISOString();
           }
 
-          console.log(`Fetching track shape for driver ${firstDriver.driver_number} from ${dateStart} to ${dateEnd}`);
           const locations = await api.getLocations(
             session.session_key, firstDriver.driver_number, dateStart, dateEnd
           );
           if (locations && locations.length > 20) {
             state.trackShape = locations;
-            trackRenderer.setTrackData(locations);
-            console.log(`Track shape loaded: ${locations.length} points`);
+            trackPoints2D = locations.map(p => ({ x: p.x, y: p.y }));
           } else {
-            console.warn('Insufficient location data, using fallback track');
-            generateFallbackTrack();
+            trackPoints2D = generateFallbackTrackPoints();
           }
         } catch (e) {
           console.warn('Could not load location data, generating fallback track:', e);
-          generateFallbackTrack();
+          trackPoints2D = generateFallbackTrackPoints();
         }
       } else {
-        generateFallbackTrack();
+        trackPoints2D = generateFallbackTrackPoints();
       }
     }
 
+    // Set track data in scene manager and build 3D track
+    sceneManager.setTrackData(trackPoints2D, pitLanePoints2D);
+    track3D.build(sceneManager.trackPoints3D, sceneManager.pitLanePoints3D || [], matchedCircuit);
+
+    // Store 2D track data for fallback position calculations
+    state.trackPoints2D = trackPoints2D;
+    computeArcLengths(trackPoints2D);
+
     updateLoadProgress(70);
 
-    // Build timeline from actual timestamps
+    // Build timeline
     buildTimeline();
     buildDriverLapTimes();
     updateLoadProgress(80);
 
-    createSprites();
+    // Create 3D karts
+    createKarts();
     updateLoadProgress(90);
 
     driverPanel.init(drivers);
@@ -312,20 +337,19 @@ async function onSessionSelected(session) {
     }
 
     updateLoadProgress(100);
+    sceneManager.resize();
 
-    resizeCanvas();
-    trackRenderer.resize();
-
-    // Start progressive location data fetching (only for matched circuits)
-    if (matchedCircuit && trackRenderer.trackPoints.length > 0) {
-      state.locationCache.destroy(); // Clean up any previous cache
+    // Start progressive location data fetching
+    if (matchedCircuit && sceneManager.trackPoints3D.length > 0) {
+      state.locationCache.destroy();
       state.locationCache = new LocationCache();
+      // We need to pass 2D trackPoints (in the original projected coord space) for calibration
       state.locationCache.init(
         session.session_key,
         drivers,
         state.raceStartTime,
         state.raceEndTime,
-        trackRenderer.trackPoints
+        trackPoints2D
       ).then(() => {
         console.log(`[LocationCache] Initialised. Calibrated: ${state.locationCache.isCalibrated}`);
       }).catch(e => {
@@ -346,8 +370,16 @@ async function onSessionSelected(session) {
   }
 }
 
-/** Generate a generic oval track if location data is unavailable */
-function generateFallbackTrack() {
+function projectLatLng(lng, lat) {
+  const DEG2RAD = Math.PI / 180;
+  const R = 6378137;
+  return {
+    x: R * lng * DEG2RAD,
+    y: R * Math.log(Math.tan(Math.PI / 4 + lat * DEG2RAD / 2)),
+  };
+}
+
+function generateFallbackTrackPoints() {
   const points = [];
   const steps = 200;
   for (let i = 0; i < steps; i++) {
@@ -357,13 +389,29 @@ function generateFallbackTrack() {
       y: Math.sin(t) * 2500 + (Math.sin(t * 2) * 400),
     });
   }
-  trackRenderer.setTrackData(points);
+  return points;
+}
+
+function computeArcLengths(points) {
+  state.trackLengths = [0];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    total += Math.sqrt(dx * dx + dy * dy);
+    state.trackLengths.push(total);
+  }
+  if (points.length > 1) {
+    const dx = points[0].x - points[points.length - 1].x;
+    const dy = points[0].y - points[points.length - 1].y;
+    total += Math.sqrt(dx * dx + dy * dy);
+  }
+  state.totalLength = total;
 }
 
 function showLoading(show) {
   loadingOverlay.classList.toggle('hidden', !show);
 }
-
 function updateLoadProgress(pct) {
   loaderFill.style.width = pct + '%';
 }
@@ -373,72 +421,50 @@ function updateLoadProgress(pct) {
    ============================================ */
 function buildTimeline() {
   if (state.drivers.length === 0) return;
-
-  // Determine total laps
   const maxLap = state.laps.reduce((max, l) => Math.max(max, l.lap_number || 0), 0);
   state.totalLaps = maxLap || (state.drivers.length > 0 ? 1 : 0);
   state.currentLap = 0;
 
-  // Find the exact "Lights Out" start of Lap 1 and Checkered flag end
   let earliestLapStart = Infinity;
   let latestLapEnd = 0;
 
   for (const l of state.laps) {
     if (l.date_start) {
       const time = new Date(l.date_start).getTime();
-      // Track earliest Lap 1 start
       if ((l.lap_number === 1 || l.lap_number === 0) && time < earliestLapStart) {
         earliestLapStart = time;
       }
-      // Track finishing time
       if (l.lap_duration) {
         const endTime = time + (l.lap_duration * 1000);
-        if (endTime > latestLapEnd) {
-          latestLapEnd = endTime;
-        }
+        if (endTime > latestLapEnd) latestLapEnd = endTime;
       }
     }
   }
 
-  // Restrict timeline to actual racing action (not pre-race grid sitting)
-  let fallbackStart = 0;
-  let fallbackEnd = 0;
-  
+  let fallbackStart = 0, fallbackEnd = 0;
   if (state.positions.length > 0) {
     fallbackStart = new Date(state.positions[0].date).getTime();
     fallbackEnd = new Date(state.positions[state.positions.length - 1].date).getTime();
   }
 
-  if (earliestLapStart !== Infinity) {
-    state.raceStartTime = earliestLapStart - 5000; // 5 seconds before lights out
-  } else {
-    state.raceStartTime = fallbackStart !== 0 ? fallbackStart : (state.session ? new Date(state.session.date_start).getTime() : Date.now());
-  }
+  state.raceStartTime = earliestLapStart !== Infinity
+    ? earliestLapStart - 5000
+    : (fallbackStart !== 0 ? fallbackStart : (state.session ? new Date(state.session.date_start).getTime() : Date.now()));
 
-  if (latestLapEnd !== 0) {
-    state.raceEndTime = latestLapEnd + 10000; // 10 seconds post-checkered
-  } else {
-    state.raceEndTime = fallbackEnd !== 0 ? fallbackEnd : state.raceStartTime + (2 * 60 * 60 * 1000);
-  }
+  state.raceEndTime = latestLapEnd !== 0
+    ? latestLapEnd + 10000
+    : (fallbackEnd !== 0 ? fallbackEnd : state.raceStartTime + (2 * 60 * 60 * 1000));
 
   state.raceDuration = state.raceEndTime - state.raceStartTime;
   state.currentRaceTime = 0;
-
-  // Reset event detection
   state.lastPositionMap.clear();
   state.fastestLapTime = Infinity;
   state.fastestLapDriver = null;
   state.detectedEvents.clear();
 }
 
-/**
- * Build per-driver lap timing data for accurate track position interpolation.
- * Each driver gets an array of { lap, startTime, endTime, duration } entries.
- */
 function buildDriverLapTimes() {
   state.driverLapTimes.clear();
-
-  // Group laps by driver
   const byDriver = new Map();
   for (const l of state.laps) {
     const num = l.driver_number;
@@ -447,9 +473,7 @@ function buildDriverLapTimes() {
   }
 
   byDriver.forEach((laps, driverNum) => {
-    // Sort by lap number
     laps.sort((a, b) => (a.lap_number || 0) - (b.lap_number || 0));
-
     const timing = [];
     for (const l of laps) {
       const lapNum = l.lap_number || 0;
@@ -459,12 +483,11 @@ function buildDriverLapTimes() {
       if (startTime !== null && duration !== null) {
         timing.push({
           lap: lapNum,
-          startTime: startTime - state.raceStartTime,  // offset from race start
+          startTime: startTime - state.raceStartTime,
           endTime: startTime - state.raceStartTime + duration * 1000,
-          duration: duration * 1000, // in ms
+          duration: duration * 1000,
         });
       } else if (startTime !== null) {
-        // Duration unknown, estimate ~90 seconds
         timing.push({
           lap: lapNum,
           startTime: startTime - state.raceStartTime,
@@ -473,59 +496,53 @@ function buildDriverLapTimes() {
         });
       }
     }
-
     state.driverLapTimes.set(driverNum, timing);
   });
 }
 
-function createSprites() {
-  state.sprites.clear();
+function createKarts() {
+  // Dispose old karts
+  for (const kart of state.karts.values()) kart.dispose();
+  state.karts.clear();
+
   const year = state.session ? (state.session.year || 2026) : 2026;
   state.drivers.forEach(d => {
-    state.sprites.set(d.driver_number, new DriverSprite(d, year));
+    const color = getTeamColor(d.team_name, year);
+    const kart = new Kart3D(d, color, sceneManager.scene, year);
+    state.karts.set(d.driver_number, kart);
   });
 }
 
-/**
- * Get the current position data at a given race time.
- * Returns a Map of driverNumber -> { position, gap, tireCompound }
- */
+/* ============================================
+   Position & Progress
+   ============================================ */
 function getPositionSnapshot(raceTimeMs) {
   if (state.drivers.length === 0) return new Map();
-
   const currentEpoch = state.raceStartTime + raceTimeMs;
   const currentTimeStr = new Date(currentEpoch).toISOString();
   const snapshot = new Map();
 
-  // Find latest position for each driver up to currentTime
   for (const p of state.positions) {
     if (p.date > currentTimeStr) break;
-    snapshot.set(p.driver_number, {
-      position: p.position,
-      date: p.date,
-    });
+    snapshot.set(p.driver_number, { position: p.position, date: p.date });
   }
 
-  // Fallback: If at the very start of the race or missing telemetry, provide at least the grid position.
   state.drivers.forEach((driver, index) => {
     if (!snapshot.has(driver.driver_number)) {
-      // Find their absolute first data point in the entire session record
       const firstEver = state.positions.find(p => p.driver_number === driver.driver_number);
       snapshot.set(driver.driver_number, {
-        position: firstEver ? firstEver.position : (index + 1), // Grid fallback
+        position: firstEver ? firstEver.position : (index + 1),
         date: firstEver ? firstEver.date : currentTimeStr,
       });
     }
   });
 
-  // Add gap info from intervals
   const intervalSnapshot = new Map();
   for (const iv of state.intervals) {
     if (iv.date > currentTimeStr) break;
     intervalSnapshot.set(iv.driver_number, iv);
   }
 
-  // Add stint/tire info (use current lap to find active stint)
   const stintSnapshot = new Map();
   const activeLap = state.currentLap === 0 ? 1 : state.currentLap;
   for (const s of state.stints) {
@@ -540,7 +557,6 @@ function getPositionSnapshot(raceTimeMs) {
   snapshot.forEach((data, driverNum) => {
     const interval = intervalSnapshot.get(driverNum);
     const stint = stintSnapshot.get(driverNum);
-
     let gap = '-';
     if (interval) {
       if (interval.gap_to_leader !== null && interval.gap_to_leader !== undefined) {
@@ -549,7 +565,6 @@ function getPositionSnapshot(raceTimeMs) {
         gap = `+${Number(interval.interval).toFixed(1)}s`;
       }
     }
-
     result.set(driverNum, {
       position: data.position,
       gap,
@@ -561,65 +576,37 @@ function getPositionSnapshot(raceTimeMs) {
   return result;
 }
 
-/**
- * Get a driver's progress around the track (0..1) at the current race time.
- * Uses per-driver lap timing for accurate interpolation.
- */
 function getDriverTrackProgress(driverNum, raceTimeMs, position, totalDrivers) {
   const lapTimes = state.driverLapTimes.get(driverNum);
-
   if (lapTimes && lapTimes.length > 0) {
-    // Find which lap this driver is currently on
     let currentLapData = null;
     let currentLapNum = 0;
-
     for (const lt of lapTimes) {
       if (raceTimeMs >= lt.startTime && raceTimeMs < lt.endTime) {
-        currentLapData = lt;
-        currentLapNum = lt.lap;
-        break;
+        currentLapData = lt; currentLapNum = lt.lap; break;
       }
       if (raceTimeMs >= lt.startTime) {
-        currentLapData = lt;
-        currentLapNum = lt.lap;
+        currentLapData = lt; currentLapNum = lt.lap;
       }
     }
-
     if (currentLapData) {
-      // Progress within this lap (0..1)
       const lapProgress = Math.min(1, Math.max(0,
-        (raceTimeMs - currentLapData.startTime) / currentLapData.duration
-      ));
-
-      // Total progress: completed laps + fraction of current lap
-      // Normalise to 0..1 based on total race laps
+        (raceTimeMs - currentLapData.startTime) / currentLapData.duration));
       const totalProgress = state.totalLaps > 0
-        ? ((currentLapNum - 1 + lapProgress) / state.totalLaps)
-        : lapProgress;
-
-      // Add a small stagger offset based on position to prevent overlap
+        ? ((currentLapNum - 1 + lapProgress) / state.totalLaps) : lapProgress;
       const stagger = (position - 1) * 0.008;
-
       return (totalProgress - stagger + 10) % 1;
     }
   }
-
-  // Fallback: use linear time-based estimate with position stagger
-  const linearProgress = state.raceDuration > 0
-    ? raceTimeMs / state.raceDuration
-    : 0;
+  const linearProgress = state.raceDuration > 0 ? raceTimeMs / state.raceDuration : 0;
   const stagger = (position - 1) / Math.max(1, totalDrivers) * 0.06;
   return ((linearProgress - stagger) + 10) % 1;
 }
 
-/**
- * Get current lap number from race time.
- */
 function getCurrentLap(raceTimeMs) {
   if (state.laps.length === 0) return 0;
   const currentEpoch = state.raceStartTime + raceTimeMs;
   const currentTimeStr = new Date(currentEpoch).toISOString();
-
   let lap = 0;
   for (const l of state.laps) {
     if (l.date_start && l.date_start <= currentTimeStr) {
@@ -629,34 +616,22 @@ function getCurrentLap(raceTimeMs) {
   return lap;
 }
 
-/**
- * Get weather at current race time.
- */
 function getWeatherAtTime(raceTimeMs) {
   if (state.weather.length === 0) return null;
-  const currentEpoch = state.raceStartTime + raceTimeMs;
-  const currentTimeStr = new Date(currentEpoch).toISOString();
-
-  let weather = state.weather[0];
-  for (const w of state.weather) {
-    if (w.date <= currentTimeStr) weather = w;
-    else break;
+  const currentTimeStr = new Date(state.raceStartTime + raceTimeMs).toISOString();
+  let w = state.weather[0];
+  for (const ww of state.weather) {
+    if (ww.date <= currentTimeStr) w = ww; else break;
   }
-  return weather;
+  return w;
 }
 
-/**
- * Get race control messages up to current race time.
- */
 function getRaceControlAtTime(raceTimeMs) {
   if (state.raceControl.length === 0) return null;
-  const currentEpoch = state.raceStartTime + raceTimeMs;
-  const currentTimeStr = new Date(currentEpoch).toISOString();
-
+  const currentTimeStr = new Date(state.raceStartTime + raceTimeMs).toISOString();
   let latest = null;
   for (const rc of state.raceControl) {
-    if (rc.date <= currentTimeStr) latest = rc;
-    else break;
+    if (rc.date <= currentTimeStr) latest = rc; else break;
   }
   return latest;
 }
@@ -665,76 +640,71 @@ function getRaceControlAtTime(raceTimeMs) {
    Event Detection — Triggers Mario Kart effects
    ============================================ */
 function detectEvents(posSnapshot, raceTimeMs) {
-  // Use time-bucketed keys to prevent duplicate events (bucket = 1 second window)
   const timeBucket = Math.floor(raceTimeMs / 1000);
   const eventKey = (type, extra) => `${type}:${extra}:${timeBucket}`;
 
   posSnapshot.forEach((data, driverNum) => {
-    const sprite = state.sprites.get(driverNum);
-    if (!sprite) return;
-
+    const kart = state.karts.get(driverNum);
+    if (!kart) return;
     const prevPos = state.lastPositionMap.get(driverNum);
 
-    // --- Overtake detection ---
+    // Overtake
     if (prevPos !== undefined && data.position < prevPos) {
       const key = eventKey('overtake', driverNum);
       if (!state.detectedEvents.has(key)) {
         state.detectedEvents.add(key);
-
         let overtakenDriver = '';
         posSnapshot.forEach((d2, num2) => {
           if (num2 !== driverNum && d2.position === data.position + 1) {
-            const sp2 = state.sprites.get(num2);
-            overtakenDriver = sp2?.abbreviation || '';
+            const k2 = state.karts.get(num2);
+            overtakenDriver = k2?.abbreviation || '';
           }
         });
-
+        // Emit 3D particles at kart position
+        particles3D.emitBoost(
+          kart.mesh.position.x, kart.mesh.position.y,
+          kart.mesh.position.z, kart.teamColor, 20
+        );
+        particles3D.emitSpotlight(
+          kart.mesh.position.x, kart.mesh.position.y,
+          kart.mesh.position.z, '#ff8000'
+        );
         marioEffects.trigger(EFFECT_TYPES.OVERTAKE, {
-          driver1: sprite.abbreviation,
-          driver2: overtakenDriver,
-          cx: sprite.cx,
-          cy: sprite.cy,
-          color: sprite.teamColor,
-          lap: state.currentLap,
+          driver1: kart.abbreviation, driver2: overtakenDriver,
+          cx: 0, cy: 0, color: kart.teamColor, lap: state.currentLap,
         });
       }
     }
 
-    // --- Poking detection (Gap < 0.5s) ---
-    // We trigger this every 3s if they are in the 'danger zone'
+    // Poke
     const intervalVal = data.intervalValue || 999;
     if (intervalVal < 0.5 && data.position > 1) {
       const pokeBucket = Math.floor(raceTimeMs / 3000);
       const pokeKey = `poke:${driverNum}:${pokeBucket}`;
       if (!state.detectedEvents.has(pokeKey)) {
         state.detectedEvents.add(pokeKey);
-        const sprite = state.sprites.get(driverNum);
-        if (sprite) {
-          marioEffects.trigger(EFFECT_TYPES.POKE, {
-              driver: sprite.abbreviation,
-              cx: sprite.cx,
-              cy: sprite.cy,
-              lap: state.currentLap
-          });
-        }
+        particles3D.emitSpotlight(
+          kart.mesh.position.x, kart.mesh.position.y,
+          kart.mesh.position.z, '#ff0000'
+        );
+        marioEffects.trigger(EFFECT_TYPES.POKE, {
+          driver: kart.abbreviation, cx: 0, cy: 0, lap: state.currentLap,
+        });
       }
     }
 
-    // --- Banana Defense Detection (Gap < 1s to > 1s) ---
+    // Banana defense
     const prevInterval = state.lastIntervalMap.get(driverNum) || 999;
     if (prevInterval < 1.0 && intervalVal >= 1.0 && data.position > 1) {
       const defenseKey = `defense:${driverNum}:${timeBucket}`;
       if (!state.detectedEvents.has(defenseKey)) {
         state.detectedEvents.add(defenseKey);
-        // Find driver ahead to drop the banana
         for (const [num2, d2] of posSnapshot.entries()) {
           if (d2.position === data.position - 1) {
-            const aheadSprite = state.sprites.get(num2);
-            if (aheadSprite) {
+            const aheadKart = state.karts.get(num2);
+            if (aheadKart) {
               marioEffects.trigger(EFFECT_TYPES.YELLOW_FLAG, {
-                cx: aheadSprite.cx,
-                cy: aheadSprite.cy,
-                lap: state.currentLap
+                cx: 0, cy: 0, lap: state.currentLap,
               });
             }
             break;
@@ -747,34 +717,34 @@ function detectEvents(posSnapshot, raceTimeMs) {
     state.lastIntervalMap.set(driverNum, intervalVal);
   });
 
-  // --- Retirement / Blue Shell detection ---
+  // Retirement
   state.drivers.forEach(d => {
     const num = d.driver_number;
     const wasPresent = state.lastPositionMap.has(num);
     const isNowMissing = wasPresent && !posSnapshot.has(num);
-    
-    // If they were active but suddenly vanished from the lead-lap telemetry, they retired
     if (isNowMissing) {
-      const key = `retire:${num}`; // only once per driver
+      const key = `retire:${num}`;
       if (!state.detectedEvents.has(key)) {
         state.detectedEvents.add(key);
-        const sprite = state.sprites.get(num);
+        const kart = state.karts.get(num);
+        if (kart) {
+          particles3D.emitExplosion(
+            kart.mesh.position.x, kart.mesh.position.y,
+            kart.mesh.position.z, 40
+          );
+        }
         marioEffects.trigger(EFFECT_TYPES.RETIREMENT, {
-          driver: sprite?.abbreviation || num,
-          sprite,
-          cx: sprite?.cx,
-          cy: sprite?.cy,
-          lap: state.currentLap
+          driver: kart?.abbreviation || num,
+          sprite: kart, cx: 0, cy: 0, lap: state.currentLap,
         });
       }
     }
   });
 
-  // --- Fastest lap detection ---
+  // Fastest lap
   const lap = getCurrentLap(raceTimeMs);
   if (lap !== state.currentLap) {
     state.currentLap = lap;
-
     for (const l of state.laps) {
       if (l.lap_number === lap - 1 && l.lap_duration) {
         if (l.lap_duration < state.fastestLapTime) {
@@ -782,14 +752,17 @@ function detectEvents(posSnapshot, raceTimeMs) {
           const key = eventKey('fastest', l.driver_number);
           if (!state.detectedEvents.has(key)) {
             state.detectedEvents.add(key);
-            const sprite = state.sprites.get(l.driver_number);
-            if (sprite) {
+            const kart = state.karts.get(l.driver_number);
+            if (kart) {
+              kart.hasStar = true;
+              kart.starTimer = 180;
+              particles3D.emitStarSparkle(
+                kart.mesh.position.x, kart.mesh.position.y,
+                kart.mesh.position.z
+              );
               marioEffects.trigger(EFFECT_TYPES.FASTEST_LAP, {
-                driver: sprite.abbreviation,
-                sprite,
-                cx: sprite.cx,
-                cy: sprite.cy,
-                lap: state.currentLap,
+                driver: kart.abbreviation, sprite: kart,
+                cx: 0, cy: 0, lap: state.currentLap,
               });
             }
           }
@@ -798,61 +771,53 @@ function detectEvents(posSnapshot, raceTimeMs) {
     }
   }
 
-  // --- Race control events ---
+  // Race control
   const rc = getRaceControlAtTime(raceTimeMs);
   if (rc) {
     const rcKey = `rc:${rc.date}`;
     if (!state.detectedEvents.has(rcKey)) {
       state.detectedEvents.add(rcKey);
       raceInfo.addRaceControlMessage(rc);
-
       const msg = (rc.message || '').toUpperCase();
       const flag = (rc.flag || '').toUpperCase();
-
       if (flag === 'RED' || msg.includes('RED FLAG')) {
         marioEffects.trigger(EFFECT_TYPES.RED_FLAG, { lap: state.currentLap });
       } else if (flag === 'YELLOW' || msg.includes('YELLOW')) {
-        marioEffects.trigger(EFFECT_TYPES.YELLOW_FLAG, {
-          cx: canvas.clientWidth * (0.3 + Math.random() * 0.4),
-          cy: canvas.clientHeight * (0.3 + Math.random() * 0.4),
-          lap: state.currentLap,
-        });
+        marioEffects.trigger(EFFECT_TYPES.YELLOW_FLAG, { cx: 0, cy: 0, lap: state.currentLap });
       }
       if (msg.includes('SAFETY CAR') && !msg.includes('VIRTUAL')) {
-        marioEffects.trigger(EFFECT_TYPES.SAFETY_CAR, {
-          canvasWidth: canvas.clientWidth,
-          canvasHeight: canvas.clientHeight,
-          lap: state.currentLap,
-        });
+        marioEffects.trigger(EFFECT_TYPES.SAFETY_CAR, { canvasWidth: 0, canvasHeight: 0, lap: state.currentLap });
       }
-      if (rc.status) {
-        raceInfo.updateTrackStatus(rc.status);
-      }
+      if (rc.status) raceInfo.updateTrackStatus(rc.status);
     }
   }
 
-  // --- Rain detection ---
+  // Rain
   const weather = getWeatherAtTime(raceTimeMs);
   if (weather) {
     if (weather.rainfall && weather.rainfall > 0 && !marioEffects.isRaining) {
       marioEffects.trigger(EFFECT_TYPES.RAIN, { lap: state.currentLap });
+      environment3D.setRaining(true);
     } else if ((!weather.rainfall || weather.rainfall === 0) && marioEffects.isRaining) {
       marioEffects.stopRain();
+      environment3D.setRaining(false);
     }
     raceInfo.updateWeather(weather);
   }
 
-  // --- Race finish ---
+  // Race finish
   if (state.currentLap === state.totalLaps && state.totalLaps > 0) {
     const key = 'finish';
     if (!state.detectedEvents.has(key)) {
       state.detectedEvents.add(key);
       const winner = [...posSnapshot.entries()].find(([, d]) => d.position === 1);
-      const winnerSprite = winner ? state.sprites.get(winner[0]) : null;
+      const winnerKart = winner ? state.karts.get(winner[0]) : null;
+      particles3D.emitConfetti(sceneManager.trackBounds, 80);
+      setTimeout(() => particles3D.emitConfetti(sceneManager.trackBounds, 60), 500);
+      setTimeout(() => particles3D.emitConfetti(sceneManager.trackBounds, 40), 1000);
       marioEffects.trigger(EFFECT_TYPES.RACE_FINISH, {
-        driver: winnerSprite?.abbreviation || '???',
-        canvasWidth: canvas.clientWidth,
-        lap: state.totalLaps,
+        driver: winnerKart?.abbreviation || '???',
+        canvasWidth: 0, lap: state.totalLaps,
       });
     }
   }
@@ -869,10 +834,9 @@ function renderLoop(timestamp) {
   const dtMs = lastTimestamp > 0 ? (timestamp - lastTimestamp) : 0;
   lastTimestamp = timestamp;
 
-  // --- Advance race time based on wall-clock dt and speed multiplier ---
+  // Advance race time
   if (state.isPlaying && state.raceDuration > 0) {
     state.currentRaceTime += dtMs * state.speed;
-
     if (state.currentRaceTime >= state.raceDuration) {
       state.currentRaceTime = state.raceDuration;
       state.isPlaying = false;
@@ -881,71 +845,30 @@ function renderLoop(timestamp) {
     }
   }
 
-  // --- Get position snapshot at current race time ---
+  // Get position snapshot
   const posSnapshot = getPositionSnapshot(state.currentRaceTime);
 
-  // --- Detect events ---
+  // Detect events
   if (state.raceDuration > 0) {
     detectEvents(posSnapshot, state.currentRaceTime);
   }
 
-  // --- Update driver sprite positions ---
-  if (trackRenderer.trackPoints.length > 0 && posSnapshot.size > 0) {
+  // Update kart positions
+  if (sceneManager.trackPoints3D.length > 0 && posSnapshot.size > 0) {
     const totalDrivers = posSnapshot.size;
     const currentEpoch = state.raceStartTime + state.currentRaceTime;
     const cache = state.locationCache;
     const useRealPos = cache.isCalibrated && cache.hasDataAt(currentEpoch);
 
-    // --- Pre-Render: Camera Follow ---
-    if (state.trackedDriver !== null) {
-      const data = posSnapshot.get(state.trackedDriver);
-      const sprite = state.sprites.get(state.trackedDriver);
-      if (data && sprite && !sprite.isPitting && !sprite.isRetired) {
-        const oldPanX = trackRenderer.panX;
-        const oldPanY = trackRenderer.panY;
-
-        let didFocus = false;
-        if (useRealPos) {
-          const realPos = cache.getDriverPosition(state.trackedDriver, currentEpoch);
-          if (realPos) {
-            trackRenderer.setTrackingFocus(realPos.x, realPos.y);
-            didFocus = true;
-          }
-        }
-        if (!didFocus) {
-          // Fallback tracking
-          const progress = getDriverTrackProgress(state.trackedDriver, state.currentRaceTime, data.position, totalDrivers);
-          const p = ((progress % 1) + 1) % 1;
-          const targetLen = p * trackRenderer.totalLength;
-          let lo = 0, hi = trackRenderer.trackLengths.length - 1;
-          while (lo < hi) {
-            const mid = (lo + hi) >> 1;
-            if (trackRenderer.trackLengths[mid] < targetLen) lo = mid + 1;
-            else hi = mid;
-          }
-          const pt0 = trackRenderer.trackPoints[Math.max(0, lo - 1)];
-          if (pt0) trackRenderer.setTrackingFocus(pt0.x, pt0.y);
-        }
-
-        const dx = trackRenderer.panX - oldPanX;
-        const dy = trackRenderer.panY - oldPanY;
-        if (dx !== 0 || dy !== 0) {
-          for (const s of state.sprites.values()) {
-            s.pan(dx, dy);
-          }
-        }
-      }
-    }
-
     posSnapshot.forEach((data, driverNum) => {
-      const sprite = state.sprites.get(driverNum);
-      if (!sprite) return;
+      const kart = state.karts.get(driverNum);
+      if (!kart) return;
 
-      sprite.position = data.position;
-      sprite.gap = data.gap;
-      sprite.tireCompound = data.tireCompound;
+      kart.position = data.position;
+      kart.gap = data.gap;
+      kart.tireCompound = data.tireCompound;
 
-      // Exact millisecond pit hit-detection tracking using OpenF1 /pit endpoint
+      // Exact pit detection
       let isPittingExact = false;
       if (state.pitStops) {
         for (const p of state.pitStops) {
@@ -953,122 +876,89 @@ function renderLoop(timestamp) {
             const pitStart = new Date(p.date).getTime();
             const pitEnd = pitStart + (p.pit_duration * 1000);
             if (currentEpoch >= pitStart && currentEpoch <= pitEnd) {
-              isPittingExact = true;
-              break;
+              isPittingExact = true; break;
             }
           }
         }
       }
+      kart.isPitting = isPittingExact;
+      if (kart.isPitting) { kart.gap = 'PIT'; data.gap = 'PIT'; }
 
-      sprite.isPitting = isPittingExact;
-
-      // Update data for sidebar when pitting
-      if (sprite.isPitting) {
-        sprite.gap = 'PIT';
-        data.gap = 'PIT';
-      }
-
-      // --- Try real position data from LocationCache ---
+      // Try real position data
       if (useRealPos) {
         const realPos = cache.getDriverPosition(driverNum, currentEpoch);
         if (realPos) {
-          const canvasPos = trackRenderer.toCanvas(realPos.x, realPos.y);
-          // Compute angle from previous position
-          const dx = canvasPos.cx - sprite.cx;
-          const dy = canvasPos.cy - sprite.cy;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          
-          // Smooth the speed value slightly to avoid jittery engine pitch
-          const newSpeed = dist * 25; // Map pixel delta to approximate KM/H
-          sprite.speed = (sprite.speed * 0.8) + (newSpeed * 0.2);
+          const world = sceneManager.toWorldCoords(realPos.x, realPos.y);
+          const dx = world.x - kart.mesh.position.x;
+          const dz = world.z - kart.mesh.position.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          const newSpeed = dist * 25;
+          kart.speed = (kart.speed * 0.8) + (newSpeed * 0.2);
+          const angle = (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01)
+            ? Math.atan2(dx, dz) : kart.currentAngle;
+          kart.updatePosition(world.x, 0, world.z, angle);
+          kart.progress = 0;
 
-          const angle = (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1)
-            ? Math.atan2(dy, dx) : sprite.angle;
-          sprite.updatePosition(canvasPos.cx, canvasPos.cy, angle);
-          sprite.progress = 0; // Not used with real positioning
-
-          // Update star timer
-          if (sprite.hasStar) {
-            sprite.starTimer--;
-            if (sprite.starTimer <= 0) sprite.hasStar = false;
-            else particles.emitStarSparkle(sprite.cx, sprite.cy);
+          // Star sparkle
+          if (kart.hasStar) {
+            particles3D.emitStarSparkle(world.x, 0, world.z);
           }
-          return; // Done for this driver
+          return;
         }
       }
 
-      // --- Fallback: lap-timing interpolation ---
-      if (sprite.isPitting && trackRenderer.pitLanePoints.length > 2) {
-        // Here we just flag them as in pit and hide them if we are falling back
-        sprite.isPitting = true;
-        sprite.gap = 'PIT';
-        data.gap = 'PIT';
-        const progress = getDriverTrackProgress(
-          driverNum, state.currentRaceTime, data.position, totalDrivers
-        );
-        const { cx, cy, angle } = trackRenderer.getPositionOnTrack(progress);
-        sprite.updatePosition(cx, cy, angle);
-        sprite.progress = progress;
-      } else {
-        const progress = getDriverTrackProgress(
-          driverNum, state.currentRaceTime, data.position, totalDrivers
-        );
-        const { cx, cy, angle } = trackRenderer.getPositionOnTrack(progress);
-        
-        // Calculate speed (approx km/h) for Mushroom boost heuristic
-        const dProgress = Math.abs(progress - (sprite.progress || 0));
-        if (dProgress < 0.5) { // ignore teleports/lap finishes
-          const dtSeconds = dtMs / 1000;
-          if (dtSeconds > 0) {
-            const trackLengthKm = (trackRenderer.totalLength || 5000) / 1000;
-            sprite.speed = (dProgress * trackLengthKm) / (dtSeconds / 3600);
-          }
-        }
-        
-        sprite.updatePosition(cx, cy, angle);
-        sprite.progress = progress;
+      // Fallback: lap-timing interpolation
+      const progress = getDriverTrackProgress(
+        driverNum, state.currentRaceTime, data.position, totalDrivers
+      );
+      const pos3D = sceneManager.getPositionOnTrack(progress);
+      kart.updatePosition(pos3D.x, pos3D.y, pos3D.z, pos3D.angle);
+      kart.progress = progress;
+
+      // Speed calc
+      const dProgress = Math.abs(progress - (kart._prevProgress || 0));
+      if (dProgress < 0.5 && dtMs > 0) {
+        const dtSec = dtMs / 1000;
+        const trackLenKm = 5;
+        kart.speed = (dProgress * trackLenKm) / (dtSec / 3600);
+      }
+      kart._prevProgress = progress;
+
+      // Star sparkle
+      if (kart.hasStar) {
+        particles3D.emitStarSparkle(pos3D.x, pos3D.y, pos3D.z);
       }
 
-      // Update star timer
-      if (sprite.hasStar) {
-        sprite.starTimer--;
-        if (sprite.starTimer <= 0) sprite.hasStar = false;
-        else particles.emitStarSparkle(sprite.cx, sprite.cy);
-      }
+      // Mushroom boost heuristic
+      const speedKmh = kart.speed || 0;
+      const prevSpeed = kart._prevSpeed || 0;
+      kart.hasMushroom = speedKmh > 315 || (speedKmh > 200 && speedKmh > prevSpeed * 1.05);
+      kart._prevSpeed = speedKmh;
 
-      // Mushroom Boost (Battery) Heuristic: High acceleration or top speeds
-      // If speed > 310km/h or sudden 10% acceleration, show Mushroom
-      const speedKmh = sprite.speed || 0;
-      const prevSpeed = sprite._prevSpeed || 0;
-      sprite.hasMushroom = speedKmh > 315 || (speedKmh > 200 && speedKmh > prevSpeed * 1.05);
-      sprite._prevSpeed = speedKmh;
-
-      if (sprite.hasMushroom && state.isPlaying) {
-        particles.emitBoost(sprite.cx, sprite.cy, sprite.teamColor, 2);
+      if (kart.hasMushroom && state.isPlaying) {
+        particles3D.emitBoost(pos3D.x, pos3D.y, pos3D.z, kart.teamColor, 2);
       }
     });
   }
 
-  // --- Draw frame ---
-  trackRenderer.clear();
-  trackRenderer.drawTrack();
-
-  // Draw sprites (sorted by position so leader draws on top)
-  const sortedSprites = [...state.sprites.values()]
-    .filter(s => !s.isRetired)
-    .sort((a, b) => b.position - a.position); // Draw back-of-pack first
-  for (const sprite of sortedSprites) {
-    sprite.draw(trackRenderer.ctx, timestamp);
+  // Update all karts (animation, trail, effects)
+  for (const kart of state.karts.values()) {
+    kart.update(timestamp);
   }
 
-  // Draw particles
-  particles.update();
-  particles.draw(trackRenderer.ctx);
+  // Update particles
+  particles3D.update();
 
-  // Update Mario effects
-  marioEffects.update(canvas.clientWidth, canvas.clientHeight);
+  // Update environment
+  environment3D.update(timestamp);
 
-  // --- Update UI ---
+  // Update Mario DOM effects
+  marioEffects.update(container3D.clientWidth, container3D.clientHeight);
+
+  // Render 3D scene
+  sceneManager.render(timestamp);
+
+  // Update UI
   if (state.raceDuration > 0) {
     const lap = getCurrentLap(state.currentRaceTime);
     state.currentLap = lap;
@@ -1080,26 +970,18 @@ function renderLoop(timestamp) {
       state.currentLap
     );
 
-    // --- Update Dynamic Audio Engine (for tracked driver) ---
+    // Audio engine
     if (state.trackedDriver) {
-      const trackedSprite = state.sprites.get(state.trackedDriver);
-      if (trackedSprite) {
-        // Calculate acceleration (deltaSpeed) for more realistic throttle sound
-        // We use speed from the previous frame to detect load (accelerating/braking)
-        const lastSpeed = trackedSprite.lastSpeed ?? trackedSprite.speed;
-        const deltaSpeed = trackedSprite.speed - lastSpeed;
-        trackedSprite.lastSpeed = trackedSprite.speed; // Store for next frame
-
-        audioController.updateEngine(trackedSprite.speed, deltaSpeed, state.isPlaying);
+      const trackedKart = state.karts.get(state.trackedDriver);
+      if (trackedKart) {
+        const lastSpeed = trackedKart.lastSpeed ?? trackedKart.speed;
+        const deltaSpeed = trackedKart.speed - lastSpeed;
+        trackedKart.lastSpeed = trackedKart.speed;
+        audioController.updateEngine(trackedKart.speed, deltaSpeed, state.isPlaying);
       }
     } else {
       audioController.updateEngine(0, 0, false);
     }
-  }
-
-  // Draw welcome if no data
-  if (state.raceDuration === 0 && state.drivers.length === 0) {
-    drawWelcomeScreen();
   }
 }
 

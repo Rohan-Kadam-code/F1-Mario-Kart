@@ -390,10 +390,17 @@ body {
   min-height: 0;
 }
 
-#raceTrack {
+/* Three.js canvas host */
+.three-canvas-host {
   width: 100%;
   height: 100%;
+  position: absolute;
+  inset: 0;
+}
+.three-canvas-host canvas {
   display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .effect-overlay {
@@ -401,6 +408,38 @@ body {
   inset: 0;
   pointer-events: none;
   z-index: 10;
+}
+
+/* Quality toggle */
+.quality-toggle {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 20;
+}
+.quality-toggle button {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  backdrop-filter: blur(8px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.quality-toggle button.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+.quality-toggle button:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 /* ---------- Loading Overlay ---------- */
