@@ -48,6 +48,11 @@ export class Kart3D {
     this._currentPos = new THREE.Vector3(0, 0, 0);
     this._lerpFactor = 0.4;       // 'Rubber-Band' smoothing (absorbs GPS irregularities)
     this._angleLerpFactor = 0.08; // Heavier, more stable steering
+    
+    // Side-by-Side Lateral Logic
+    this.lateralOffset = 0;       // Current smoothed offset in meters
+    this.targetLateralOffset = 0; // Target offset from center (Inside/Outside line)
+    this._lateralLerp = 0.05;     // Gentle drift into overtaking lanes
   }
 
   _buildKart() {
@@ -200,7 +205,20 @@ export class Kart3D {
     if (this.trailLine) this.trailLine.visible = true;
 
     this._currentPos.lerp(this._targetPos, this._lerpFactor);
-    this.mesh.position.copy(this._currentPos);
+    
+    // ── Apply Lateral Offset (Side-by-Side Lane Logic) ──
+    // Smoothly shift target towards desired lane
+    this.lateralOffset += (this.targetLateralOffset - this.lateralOffset) * this._lateralLerp;
+    
+    // Calculate 'Right' vector based on current forward angle to shift laterally
+    // Right = Forward x Up = (sinA, 0, cosA) x (0, 1, 0) => (cosA, 0, -sinA)
+    const rightX = Math.cos(this.currentAngle);
+    const rightZ = -Math.sin(this.currentAngle);
+    
+    const posX = this._currentPos.x + (rightX * this.lateralOffset);
+    const posZ = this._currentPos.z + (rightZ * this.lateralOffset);
+    
+    this.mesh.position.set(posX, this._currentPos.y, posZ);
 
     let ad = this.targetAngle - this.currentAngle;
     while (ad > Math.PI) ad -= Math.PI * 2;

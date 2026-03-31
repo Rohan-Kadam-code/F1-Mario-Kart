@@ -1024,34 +1024,53 @@ function renderLoop(timestamp) {
 
     });
 
-    // === DYNAMIC OVERTAKING LINES (Collision Avoidance) ===
-    // Prevent 3D meshes clipping when GPS coordinates overlap.
+    // === DYNAMIC 'SIDE-BY-SIDE' RACING SYSTEM ===
+    // Prevents clipping and 'car jumps' by shifting karts into Inside/Outside lanes.
     const activeKarts = Array.from(state.karts.values()).filter(k => k.mesh.visible);
-    const repulsionRadius = 3.8; // Kart length + safety distance
     
+    // Reset target offsets for this frame (will be recalculated)
+    for (const k of activeKarts) k.targetLateralOffset = 0;
+
     for (let i = 0; i < activeKarts.length; i++) {
-      for (let j = i + 1; j < activeKarts.length; j++) {
-        const kA = activeKarts[i];
-        const kB = activeKarts[j];
-        
-        const dx = kB._targetPos.x - kA._targetPos.x;
-        const dz = kB._targetPos.z - kA._targetPos.z;
-        const distSq = dx * dx + dz * dz;
-        
-        if (distSq < repulsionRadius * repulsionRadius && distSq > 0.001) {
-          const dist = Math.sqrt(distSq);
-          const overlap = (repulsionRadius - dist);
-          
-          // Apply a gentle repulsion force pushing the target coordinates apart
-          const pushX = (dx / dist) * overlap * 0.4;
-          const pushZ = (dz / dist) * overlap * 0.4;
-          
-          kA._targetPos.x -= pushX;
-          kA._targetPos.z -= pushZ;
-          kB._targetPos.x += pushX;
-          kB._targetPos.z += pushZ;
+        for (let j = i + 1; j < activeKarts.length; j++) {
+            const kA = activeKarts[i];
+            const kB = activeKarts[j];
+            
+            const dx = kB._targetPos.x - kA._targetPos.x;
+            const dz = kB._targetPos.z - kA._targetPos.z;
+            const distSq = dx * dx + dz * dz;
+            
+            // Interaction range for side-by-side racing (approx 8m)
+            const range = 8.0;
+            if (distSq < range * range && distSq > 0.001) {
+                // Get track heading (Tangent) to project into Forward/Lateral space
+                // Using K_A as reference for track orientation
+                const forward = { x: Math.sin(kA.currentAngle), z: Math.cos(kA.currentAngle) };
+                const right = { x: Math.cos(kA.currentAngle), z: -Math.sin(kA.currentAngle) };
+                
+                // Project delta onto Right (Lateral) vector
+                const dotRight = (dx * right.x) + (dz * right.z);
+                const dotForward = (dx * forward.x) + (dz * forward.z);
+                
+                // If they are side-by-side (longitudinal overlap < 5m)
+                if (Math.abs(dotForward) < 6.0) {
+                    const overlap = 3.5 - Math.abs(dotRight); // How much lanes should overlap
+                    if (overlap > 0) {
+                        const shift = overlap * 0.5;
+                        const direction = dotRight > 0 ? 1 : -1;
+                        
+                        kA.targetLateralOffset -= direction * shift;
+                        kB.targetLateralOffset += direction * shift;
+                    }
+                }
+            }
         }
-      }
+    }
+
+    // Clamp offsets to stay on the tarmac (Track Width approx 14m -> 6m limit)
+    const tarmacLimit = (track3D.trackWidth / 2) - 1.5; 
+    for (const k of activeKarts) {
+        k.targetLateralOffset = Math.max(-tarmacLimit, Math.min(tarmacLimit, k.targetLateralOffset));
     }
   }
 
