@@ -73,12 +73,12 @@ export class Track3D {
     }
   }
 
-  /* ── Ground Plane ── */
+  /* ── Ground Plane (natural grass) ── */
   _buildGroundPlane() {
     const geo = new THREE.PlaneGeometry(6000, 6000);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x2d5a27,
-      roughness: 0.9,
+      color: 0x4a6b3a,   // Muted, natural grass — not cartoon green
+      roughness: 0.95,
       metalness: 0.0,
     });
     const mesh = new THREE.Mesh(geo, mat);
@@ -88,58 +88,75 @@ export class Track3D {
     this.group.add(mesh);
   }
 
-  /* ── Road Surface ── */
+  /* ── Road Surface (worn asphalt) ── */
   _buildRoadSurface(points) {
     const { geometry, material } = this._extrudeTrackStrip(points, this.trackWidth, {
-      color: 0x333338,
-      roughness: 0.7,
-      metalness: 0.1,
+      color: 0x2c2c2e,   // Dark grey asphalt — realistic tarmac
+      roughness: 0.82,
+      metalness: 0.05,
       yOffset: 0.1
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     this.group.add(mesh);
+
+    // Track edge white lines
+    const lineW = 0.6;
+    const edgeOuter = this.trackWidth / 2;
+    const edgeInner = edgeOuter - lineW;
+    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.12);
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.5 });
+    this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
+    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.12);
+    this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
-  /* ── Kerbs (red/white stripes along edges) ── */
+  /* ── Kerbs (red/white alternating) ── */
   _buildKerbs(points) {
-    const kerbWidth = 2;
+    const kerbWidth = 2.2;
     const outerW = this.trackWidth / 2 + kerbWidth;
     const innerW = this.trackWidth / 2;
 
-    // Left kerb
-    const leftGeo = this._buildEdgeStrip(points, innerW, outerW, 0.15);
-    const leftMat = new THREE.MeshStandardMaterial({
-      color: 0xcc2200,
-      roughness: 0.5,
-    });
-    this.group.add(new THREE.Mesh(leftGeo, leftMat));
+    // Red stripe
+    const leftRedGeo = this._buildEdgeStrip(points, innerW, innerW + kerbWidth * 0.5, 0.18);
+    const redMat = new THREE.MeshStandardMaterial({ color: 0xcc1100, roughness: 0.45 });
+    this.group.add(new THREE.Mesh(leftRedGeo, redMat));
 
-    // Right kerb
-    const rightGeo = this._buildEdgeStrip(points, -outerW, -innerW, 0.15);
-    const rightMat = new THREE.MeshStandardMaterial({
-      color: 0xcc2200,
-      roughness: 0.5,
-    });
-    this.group.add(new THREE.Mesh(rightGeo, rightMat));
+    // White stripe  
+    const leftWhiteGeo = this._buildEdgeStrip(points, innerW + kerbWidth * 0.5, outerW, 0.18);
+    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.4 });
+    this.group.add(new THREE.Mesh(leftWhiteGeo, whiteMat));
+
+    // Right side (mirrored)
+    const rightRedGeo = this._buildEdgeStrip(points, -innerW - kerbWidth * 0.5, -innerW, 0.18);
+    this.group.add(new THREE.Mesh(rightRedGeo, redMat.clone()));
+    const rightWhiteGeo = this._buildEdgeStrip(points, -outerW, -innerW - kerbWidth * 0.5, 0.18);
+    this.group.add(new THREE.Mesh(rightWhiteGeo, whiteMat.clone()));
   }
 
-  /* ── Runoff strip ── */
+  /* ── Runoff (paved runoff + gravel trap) ── */
   _buildRunoff(points) {
-    const kerbEnd = this.trackWidth / 2 + 2;
-    const runoffEnd = kerbEnd + 8;
+    const kerbEnd = this.trackWidth / 2 + 2.2;
 
-    // Left runoff — gravel
-    const leftGeo = this._buildEdgeStrip(points, kerbEnd, runoffEnd, 0.05);
-    const leftMat = new THREE.MeshStandardMaterial({
-      color: 0x5a4d3a,
-      roughness: 0.95,
+    // Paved runoff (slightly lighter asphalt) — 4 units wide
+    const pavedEnd = kerbEnd + 4;
+    const leftPavedGeo = this._buildEdgeStrip(points, kerbEnd, pavedEnd, 0.06);
+    const pavedMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3e, roughness: 0.85 });
+    this.group.add(new THREE.Mesh(leftPavedGeo, pavedMat));
+    const rightPavedGeo = this._buildEdgeStrip(points, -pavedEnd, -kerbEnd, 0.06);
+    this.group.add(new THREE.Mesh(rightPavedGeo, pavedMat.clone()));
+
+    // Gravel trap — warm sandy colour, 10 units wide
+    const gravelEnd = pavedEnd + 10;
+    const leftGravelGeo = this._buildEdgeStrip(points, pavedEnd, gravelEnd, 0.02);
+    const gravelMat = new THREE.MeshStandardMaterial({
+      color: 0xc4a96a,   // Sandy/beige gravel — realistic
+      roughness: 0.98,
+      metalness: 0.0,
     });
-    this.group.add(new THREE.Mesh(leftGeo, leftMat));
-
-    // Right runoff
-    const rightGeo = this._buildEdgeStrip(points, -runoffEnd, -kerbEnd, 0.05);
-    this.group.add(new THREE.Mesh(rightGeo, leftMat.clone()));
+    this.group.add(new THREE.Mesh(leftGravelGeo, gravelMat));
+    const rightGravelGeo = this._buildEdgeStrip(points, -gravelEnd, -pavedEnd, 0.02);
+    this.group.add(new THREE.Mesh(rightGravelGeo, gravelMat.clone()));
   }
 
   /* ── Center dashed line ── */
@@ -326,8 +343,8 @@ export class Track3D {
       yOffset: 0.08,
     });
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x2a2a30,
-      roughness: 0.8,
+      color: 0x2a2a2c,   // Pit lane — slightly lighter than main track
+      roughness: 0.85,
     });
     const mesh = new THREE.Mesh(geometry, mat);
     mesh.receiveShadow = true;
