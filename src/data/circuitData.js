@@ -29,6 +29,16 @@ const CIRCUITS = [
     // Start/finish is at index 0
     startFinishIndex: 0,
     poleSide: 'right',
+    elevationProfile: [
+      { trackFraction: 0.00, elevation: 0 },
+      { trackFraction: 0.15, elevation: -20 }, // Turn 1/2 dip
+      { trackFraction: 0.30, elevation: 35 },  // Top of the Esses
+      { trackFraction: 0.42, elevation: 15 },  // Degner drop
+      { trackFraction: 0.55, elevation: 40 },  // Climb up to Spoon
+      { trackFraction: 0.70, elevation: -20 }, // Run down to 130R
+      { trackFraction: 0.85, elevation: 10 },  // Casio Triangle climb
+      { trackFraction: 1.00, elevation: 0 }
+    ],
     // Main track centerline [lng, lat]
     trackCoords: [
       [ 136.540283, 34.843344 ], [ 136.541609, 34.842034 ], [ 136.54316, 34.840474 ], [ 136.543302, 34.840309 ],

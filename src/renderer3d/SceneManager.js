@@ -485,8 +485,25 @@ export class SceneManager {
    * The track is laid on the XZ plane at Y=0.
    * We normalise & center the data so the track fits nicely in the scene.
    */
-  setTrackData(trackPoints, pitLanePoints = []) {
+  setTrackData(trackPoints, pitLanePoints = [], circuitData = null) {
     if (!trackPoints || trackPoints.length < 3) return;
+
+    // Calculate arc lengths for interpolation
+    let lengths = [0];
+    let totalLen = 0;
+    for (let i = 1; i < trackPoints.length; i++) {
+      const dx = trackPoints[i].x - trackPoints[i - 1].x;
+      const dy = trackPoints[i].y - trackPoints[i - 1].y;
+      totalLen += Math.sqrt(dx*dx + dy*dy);
+      lengths.push(totalLen);
+    }
+    const closingDx = trackPoints[0].x - trackPoints[trackPoints.length - 1].x;
+    const closingDy = trackPoints[0].y - trackPoints[trackPoints.length - 1].y;
+    totalLen += Math.sqrt(closingDx*closingDx + closingDy*closingDy);
+    
+    this.trackTotalLength = totalLen;
+    this.nodeFractions = lengths.map(l => l / totalLen);
+    this.circuitData = circuitData;
 
     // Find bounds
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -506,17 +523,29 @@ export class SceneManager {
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
 
-    this.trackPoints3D = trackPoints.map(p => ({
-      x: (p.x - cx) * scale,
-      y: 0,  // on the ground
-      z: -(p.y - cy) * scale, // flip Y → Z (Y-up in 3D, Y was screen-up in 2D)
-    }));
+    this.trackPoints3D = trackPoints.map((p, i) => {
+      const fraction = this.nodeFractions[i];
+      let elevatedY = 0;
+      if (circuitData && circuitData.elevationProfile) {
+        elevatedY = this._interpolateElevation(fraction, circuitData.elevationProfile);
+      }
+      return {
+        x: (p.x - cx) * scale,
+        y: elevatedY,  // computed elevation
+        z: -(p.y - cy) * scale, // flip Y → Z (Y-up in 3D, Y was screen-up in 2D)
+      };
+    });
 
-    this.pitLanePoints3D = pitLanePoints.map(p => ({
-      x: (p.x - cx) * scale,
-      y: 0,
-      z: -(p.y - cy) * scale,
-    }));
+    this.pitLanePoints3D = pitLanePoints.map((p, i) => {
+      // Very naive pit lane elevation matching start/finish for now
+      let elevatedY = 0;
+      if (circuitData && circuitData.elevationProfile) elevatedY = circuitData.elevationProfile[0].elevation;
+      return {
+        x: (p.x - cx) * scale,
+        y: elevatedY,
+        z: -(p.y - cy) * scale,
+      };
+    });
 
     // Store transform params for toWorldCoords
     this._trackScale = scale;
@@ -543,6 +572,45 @@ export class SceneManager {
       0,
       (bMinZ + bMaxZ) / 2
     );
+  }
+
+  _interpolateElevation(fraction, profile) {
+    if (!profile || profile.length === 0) return 0;
+    fraction = (fraction % 1.0 + 1.0) % 1.0;
+    
+    // Find the segment
+    for (let i = 0; i < profile.length - 1; i++) {
+      if (fraction >= profile[i].trackFraction && fraction <= profile[i+1].trackFraction) {
+        // Catmull-Rom 1D interpolation setup
+        const p1_idx = i;
+        const p2_idx = i + 1;
+        const p0_idx = i === 0 ? profile.length - 2 : i - 1; // loop back
+        const p3_idx = i + 1 === profile.length - 1 ? 1 : i + 2; // loop forward
+
+        const p0 = profile[p0_idx];
+        const p1 = profile[p1_idx];
+        const p2 = profile[p2_idx];
+        const p3 = profile[p3_idx];
+
+        let t = (fraction - p1.trackFraction) / (p2.trackFraction - p1.trackFraction);
+        
+        // Handling negative distances (looping around 0 -> 1 boundary) for p0 and p3 is tricky if we use true parametric time.
+        // Assuming relatively uniform distribution of fractions between control points, a simple spline over t works fine.
+        
+        const v0 = p0.elevation;
+        const v1 = p1.elevation;
+        const v2 = p2.elevation;
+        const v3 = p3.elevation;
+        
+        return 0.5 * (
+          (2 * v1) +
+          (-v0 + v2) * t +
+          (2 * v0 - 5 * v1 + 4 * v2 - v3) * t * t +
+          (-v0 + 3 * v1 - 3 * v2 + v3) * t * t * t
+        );
+      }
+    }
+    return 0;
   }
 
   /**
@@ -576,10 +644,18 @@ export class SceneManager {
     const pt1 = pts[i1];
 
     const x = pt0.x + (pt1.x - pt0.x) * t;
+    const y = pt0.y + (pt1.y - pt0.y) * t;
     const z = pt0.z + (pt1.z - pt0.z) * t;
     const angle = Math.atan2(pt1.x - pt0.x, pt1.z - pt0.z);
+    
+    // Calculate track pitch (uphill/downhill slope)
+    const dx = pt1.x - pt0.x;
+    const dz = pt1.z - pt0.z;
+    const dy = pt1.y - pt0.y;
+    const lenXZ = Math.sqrt(dx*dx + dz*dz) || 1;
+    const pitch = Math.atan2(dy, lenXZ);
 
-    return { x, y: 0, z, angle };
+    return { x, y, z, angle, pitch };
   }
 
   /* =========================================
@@ -602,6 +678,9 @@ export class SceneManager {
      ========================================= */
 
   render(timestamp) {
+    if (this.track3D && this.track3D.update) {
+      this.track3D.update(timestamp);
+    }
     // ── Handle Garage Mode ──
     if (this.garageMode && this.garageTarget) {
       // Turntable rotation (slow auto-spin)

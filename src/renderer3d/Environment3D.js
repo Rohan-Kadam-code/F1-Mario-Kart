@@ -23,11 +23,11 @@ export class Environment3D {
     const skyGeo = new THREE.SphereGeometry(4000, 32, 15);
     const skyMat = new THREE.ShaderMaterial({
       uniforms: {
-        topColor: { value: new THREE.Color(0x1a2a4a) },      // Deep blue zenith
-        bottomColor: { value: new THREE.Color(0x3a5a3a) },    // Ground-adjacent greenish haze
-        horizonColor: { value: new THREE.Color(0x7898b8) },   // Pale blue-grey horizon
-        offset: { value: 10 },
-        exponent: { value: 0.5 },
+        topColor: { value: new THREE.Color(0x33b5e5) },      // Bright cyan-blue zenith
+        bottomColor: { value: new THREE.Color(0xdceef7) },    // Very light blue at horizon base
+        horizonColor: { value: new THREE.Color(0xffffff) },   // Crisp white horizon strip
+        offset: { value: 20 },
+        exponent: { value: 0.8 },
       },
       vertexShader: `
         varying vec3 vWorldPosition;
@@ -62,7 +62,8 @@ export class Environment3D {
 
   /* ── Fog ── */
   _setupFog() {
-    this.scene.fog = new THREE.FogExp2(0x7898b8, 0.00018);  // Match horizon colour
+    // Light blue haze, very low density to keep things vibrant and clear
+    this.scene.fog = new THREE.FogExp2(0xdceef7, 0.00008); 
   }
 
   /* ── Weather Transitions ── */
@@ -75,10 +76,10 @@ export class Environment3D {
       sky.bottomColor.value.set(0x1a2a1a);
       this.scene.fog.density = 0.00035;
     } else {
-      sky.topColor.value.set(0x1a2a4a);
-      sky.horizonColor.value.set(0x7898b8);
-      sky.bottomColor.value.set(0x3a5a3a);
-      this.scene.fog.density = 0.00018;
+      sky.topColor.value.set(0x33b5e5);
+      sky.horizonColor.value.set(0xffffff);
+      sky.bottomColor.value.set(0xdceef7);
+      this.scene.fog.density = 0.00008;
     }
   }
 

@@ -31,26 +31,35 @@ export class Track3D {
     this._clearGroup();
 
     this.circuitData = circuitData;
-    if (circuitData) {
+    if (circuitData && circuitData.trackWidthM) {
       this.trackWidth = Math.max(8, circuitData.trackWidthM * 0.8);
       this.pitLaneWidth = Math.max(6, (circuitData.pitLaneWidthM || 10) * 0.7);
       this.drsZones = circuitData.drsZones || [];
       this.sectorIndices = (circuitData.sectors || []).map(
         frac => Math.floor(frac * trackPoints.length)
       );
+    } else {
+      // Default values if data is missing
+      this.trackWidth = 14;
+      this.pitLaneWidth = 10;
+      this.drsZones = [];
+      this.sectorIndices = [];
     }
 
     if (trackPoints.length < 3) return;
 
     // Build components
-    this._buildGroundPlane();
+    this._buildTerrain(trackPoints);
     this._buildRoadSurface(trackPoints);
     this._buildKerbs(trackPoints);
     this._buildRunoff(trackPoints);
     this._buildFinishLine(trackPoints);
+    this._buildTrees(trackPoints);
+    this._buildJapanProps(trackPoints);
+    this._buildQuestionBlocks(trackPoints);
+    this._buildCenterLine(trackPoints);
     this._buildDRSZones(trackPoints);
     this._buildSectorMarkers(trackPoints);
-    this._buildCenterLine(trackPoints);
 
     if (pitLanePoints.length > 2) {
       this._buildPitLane(pitLanePoints);
@@ -73,117 +82,386 @@ export class Track3D {
     }
   }
 
-  /* ── Ground Plane (natural grass) ── */
-  _buildGroundPlane() {
-    const geo = new THREE.PlaneGeometry(6000, 6000);
+  /* ── Procedural Terrain (Molded Grass) ── */
+  _buildTerrain(points) {
+    if (!points || points.length === 0) return;
+
+    // Use a high-density plane for the heightmap
+    const size = 6000;
+    const segs = 120; // 120x120 segments (14,400 vertices)
+    const geo = new THREE.PlaneGeometry(size, size, segs, segs);
+    geo.rotateX(-Math.PI / 2);
+
+    const pos = geo.attributes.position;
+    const v = new THREE.Vector3();
+    const trackP = new THREE.Vector3();
+
+    // Pre-calculate track bounding box for performance optimization
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    }
+
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      
+      // Find nearest point on track to determine Y height
+      let minDistSq = Infinity;
+      let nearestY = 0;
+
+      // Only check points if within a reasonable distance of the track bounds
+      const margin = 200;
+      if (v.x > minX - margin && v.x < maxX + margin && v.z > minZ - margin && v.z < maxZ + margin) {
+        // Optimization: Sample track points
+        for (let j = 0; j < points.length; j += 2) {
+          const pt = points[j];
+          const dx = v.x - pt.x;
+          const dz = v.z - pt.z;
+          const d2 = dx*dx + dz*dz;
+          if (d2 < minDistSq) {
+            minDistSq = d2;
+            nearestY = pt.y || 0;
+          }
+        }
+      }
+
+      const dist = Math.sqrt(minDistSq);
+      const trackRadius = 40; // Area around track that matches track height
+      const falloff = 150;    // Smooth transition to ground level
+
+      if (dist < trackRadius) {
+        v.y = nearestY - 0.5; // Slightly below track to avoid Z-fighting
+      } else if (dist < trackRadius + falloff) {
+        const t = 1.0 - (dist - trackRadius) / falloff;
+        // Smoothstep interpolation for natural hills
+        const smoothT = t * t * (3 - 2 * t);
+        
+        // Add random terrain jitter for "detailed" organic look
+        const jitter = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * 5 * (1.0 - smoothT);
+        v.y = (nearestY - 0.5) * smoothT + jitter;
+      } else {
+        // Base ground level with larger rolling noise
+        v.y = -10 + (Math.sin(v.x * 0.02) * Math.sin(v.z * 0.02)) * 15;
+      }
+
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+
+    geo.computeVertexNormals();
+
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x4a6b3a,   // Muted, natural grass — not cartoon green
-      roughness: 0.95,
+      color: 0x5ddb3e,   // Vibrant Mario Kart green
+      roughness: 0.7,
       metalness: 0.0,
+      flatShading: false
     });
+    
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = -0.5;
     mesh.receiveShadow = true;
     this.group.add(mesh);
   }
 
-  /* ── Road Surface (worn asphalt) ── */
+  /* ── Road Surface (Realistic Grey Asphalt) ── */
   _buildRoadSurface(points) {
-    const { geometry, material } = this._extrudeTrackStrip(points, this.trackWidth, {
-      color: 0x2c2c2e,   // Dark grey asphalt — realistic tarmac
-      roughness: 0.82,
-      metalness: 0.05,
-      yOffset: 0.1
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    
+    // Base Realistic Grey Tarmac
+    ctx.fillStyle = '#515355ff'; 
+    ctx.fillRect(0, 0, 256, 256);
+    
+    // Procedural "Stony" grain
+    for (let i = 0; i < 3000; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const s = Math.random() * 0.2;
+        ctx.fillStyle = `rgba(255,255,255,${s})`;
+        ctx.fillRect(x, y, 1, 1);
+    }
+    
+    // Subtle slab lines
+    ctx.strokeStyle = 'rgba(150, 149, 154, 0.47)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(128, 0); ctx.lineTo(128, 256); ctx.stroke();
+    
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 400); 
+    
+    const material = new THREE.MeshStandardMaterial({
+      color: '#888a8d', // Lightened grey
+      map: tex,
+      roughness: 0.8,
+      metalness: 0.1,
+      emissive: 0x444448, // Stronger emissive to maintain grey appearance in chase-cam
+      emissiveIntensity: 0.8,
+      side: THREE.DoubleSide
     });
+    
+    const { geometry } = this._extrudeTrackStrip(points, this.trackWidth, {
+      yOffset: 0.2
+    });
+    
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     this.group.add(mesh);
 
-    // Track edge white lines
-    const lineW = 0.6;
+    // Clean white boundary lines
+    const lineW = 0.5;
     const edgeOuter = this.trackWidth / 2;
     const edgeInner = edgeOuter - lineW;
-    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.12);
-    const lineMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.5 });
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 });
+    
+    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.22);
     this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
-    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.12);
+    
+    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.22);
     this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
-  /* ── Kerbs (red/white alternating) ── */
+  /* ── 3D Stepped Kerbs (Discrete 3D Blocks) ── */
   _buildKerbs(points) {
-    const kerbWidth = 2.2;
-    const outerW = this.trackWidth / 2 + kerbWidth;
+    const kerbWidth = 3.5;
     const innerW = this.trackWidth / 2;
+    const blockHeight = 0.8; 
+    const blockLength = 3.0; // Distance along track
 
-    // Red stripe
-    const leftRedGeo = this._buildEdgeStrip(points, innerW, innerW + kerbWidth * 0.5, 0.18);
-    const redMat = new THREE.MeshStandardMaterial({ color: 0xcc1100, roughness: 0.45 });
-    this.group.add(new THREE.Mesh(leftRedGeo, redMat));
+    // Materials
+    const matRed = new THREE.MeshStandardMaterial({ color: 0xff1a1a, roughness: 0.4 });
+    const matWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+    
+    const blockGeo = new THREE.BoxGeometry(kerbWidth, blockHeight, blockLength);
 
-    // White stripe  
-    const leftWhiteGeo = this._buildEdgeStrip(points, innerW + kerbWidth * 0.5, outerW, 0.18);
-    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.4 });
-    this.group.add(new THREE.Mesh(leftWhiteGeo, whiteMat));
+    for (let i = 0; i < points.length; i += 2) {
+      const p = points[i];
+      const pNext = points[(i + 1) % points.length];
+      const dx = pNext.x - p.x;
+      const dz = pNext.z - p.z;
+      const angle = Math.atan2(dx, dz);
+      
+      const mat = (Math.floor(i / 1.5) % 2 === 0) ? matRed : matWhite;
 
-    // Right side (mirrored)
-    const rightRedGeo = this._buildEdgeStrip(points, -innerW - kerbWidth * 0.5, -innerW, 0.18);
-    this.group.add(new THREE.Mesh(rightRedGeo, redMat.clone()));
-    const rightWhiteGeo = this._buildEdgeStrip(points, -outerW, -innerW - kerbWidth * 0.5, 0.18);
-    this.group.add(new THREE.Mesh(rightWhiteGeo, whiteMat.clone()));
+      // Left Side Blocks
+      const lBlock = new THREE.Mesh(blockGeo, mat);
+      const lx = p.x + Math.cos(angle) * (innerW + kerbWidth/2);
+      const lz = p.z - Math.sin(angle) * (innerW + kerbWidth/2);
+      lBlock.position.set(lx, (p.y||0) + blockHeight/2, lz);
+      lBlock.rotation.y = angle;
+      lBlock.castShadow = true;
+      this.group.add(lBlock);
+
+      // Right Side Blocks
+      const rBlock = new THREE.Mesh(blockGeo, mat.clone());
+      const rx = p.x - Math.cos(angle) * (innerW + kerbWidth/2);
+      const rz = p.z + Math.sin(angle) * (innerW + kerbWidth/2);
+      rBlock.position.set(rx, (p.y||0) + blockHeight/2, rz);
+      rBlock.rotation.y = angle;
+      rBlock.castShadow = true;
+      this.group.add(rBlock);
+    }
   }
 
-  /* ── Runoff (paved runoff + gravel trap) ── */
+  /* ── Runoff Area (Cleaned) ── */
   _buildRunoff(points) {
-    const kerbEnd = this.trackWidth / 2 + 2.2;
+    const kerbEnd = this.trackWidth / 2 + 3.5; // Offset to sit outside stepped kerbs
 
-    // Paved runoff (slightly lighter asphalt) — 4 units wide
-    const pavedEnd = kerbEnd + 4;
-    const leftPavedGeo = this._buildEdgeStrip(points, kerbEnd, pavedEnd, 0.06);
-    const pavedMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3e, roughness: 0.85 });
-    this.group.add(new THREE.Mesh(leftPavedGeo, pavedMat));
-    const rightPavedGeo = this._buildEdgeStrip(points, -pavedEnd, -kerbEnd, 0.06);
-    this.group.add(new THREE.Mesh(rightPavedGeo, pavedMat.clone()));
+    // Border Walls (High-contrast Blue/White)
+    const wallHeight = 1.4;
+    const borderMatBlue = new THREE.MeshStandardMaterial({ color: 0x0066ee, roughness: 0.2 });
+    const borderMatWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
 
-    // Gravel trap — warm sandy colour, 10 units wide
-    const gravelEnd = pavedEnd + 10;
-    const leftGravelGeo = this._buildEdgeStrip(points, pavedEnd, gravelEnd, 0.02);
-    const gravelMat = new THREE.MeshStandardMaterial({
-      color: 0xc4a96a,   // Sandy/beige gravel — realistic
-      roughness: 0.98,
-      metalness: 0.0,
+    const segmentCount = points.length;
+    for (let i = 0; i < segmentCount; i += 6) {
+      const segPoints = points.slice(i, i + 8);
+      if (segPoints.length < 2) continue;
+      
+      const mat = (Math.floor(i / 12) % 2 === 0) ? borderMatBlue : borderMatWhite;
+      
+      const lWall = this._buildEdgeStrip(segPoints, kerbEnd, kerbEnd + 1.2, 0.15, false);
+      this.group.add(new THREE.Mesh(lWall, mat));
+      
+      const rWall = this._buildEdgeStrip(segPoints, -kerbEnd - 1.2, -kerbEnd, 0.15, false);
+      this.group.add(new THREE.Mesh(rWall, mat));
+    }
+  }
+
+  /* ── Japan Aesthetics: Sakura & Pom-Pom Trees ── */
+
+  _buildTrees(points) {
+    // Find track bounds to scatter trees outside
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    }
+
+    const treeCount = 150;
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4d2600 });
+    const sakuraMat = new THREE.MeshStandardMaterial({ 
+        color: 0xffb7c5, 
+        roughness: 0.8,
+        emissive: 0xffb7c5,
+        emissiveIntensity: 0.2 // Soft pink glow
+    }); 
+    const greenMat = new THREE.MeshStandardMaterial({ 
+        color: 0x2d5a27, 
+        roughness: 0.8,
+        emissive: 0x2d5a27,
+        emissiveIntensity: 0.1
+    }); 
+
+    for (let i = 0; i < treeCount; i++) {
+        const x = minX - 200 + Math.random() * (maxX - minX + 400);
+        const z = minZ - 200 + Math.random() * (maxZ - minZ + 400);
+        
+        // Find distance to nearest track point
+        let minDistSq = Infinity;
+        let nearestY = 0;
+        for (let j = 0; j < points.length; j += 10) {
+            const pt = points[j];
+            const d2 = (x - pt.x)**2 + (z - pt.z)**2;
+            if (d2 < minDistSq) { minDistSq = d2; nearestY = pt.y || 0; }
+        }
+
+        const dist = Math.sqrt(minDistSq);
+        if (dist > 35 && dist < 300) {
+            const treeGroup = new THREE.Group();
+            
+            // Randomly choose Sakura or Green
+            const isSakura = Math.random() > 0.4;
+            const leafMat = isSakura ? sakuraMat : greenMat;
+            
+            // Trunk
+            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 4, 8), trunkMat);
+            trunk.position.y = 2;
+            treeGroup.add(trunk);
+
+            // Foliage (Refined clusters)
+            const foliageCount = isSakura ? 4 : 3;
+            for (let j = 0; j < foliageCount; j++) {
+                const fSize = isSakura ? (1.2 + Math.random() * 0.8) : (1.5 + Math.random() * 1.0);
+                const foliage = new THREE.Mesh(new THREE.SphereGeometry(fSize, 8, 8), leafMat);
+                
+                // Randomly offset around the top of the trunk
+                const angle = (j / foliageCount) * Math.PI * 2;
+                const radius = isSakura ? 1.5 : 1.0;
+                foliage.position.set(
+                    Math.cos(angle) * radius,
+                    4 + Math.random() * 2,
+                    Math.sin(angle) * radius
+                );
+                treeGroup.add(foliage);
+            }
+
+            treeGroup.position.set(x, nearestY - 5 + (Math.random() * 2), z); // Sit on terrain
+            if (nearestY < -5) treeGroup.position.y = -10; // Floor limit
+            
+            treeGroup.scale.setScalar(0.8 + Math.random() * 1.5);
+            treeGroup.rotation.y = Math.random() * Math.PI;
+            this.group.add(treeGroup);
+        }
+    }
+  }
+
+  /* ── Japan Aesthetics: Castle & Torii Gate ── */
+  _buildJapanProps(points) {
+    // 1. Japanese Castle Keep (Background)
+    const castle = new THREE.Group();
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x2c3e50 }); // Dark blue/grey roof
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xecf0f1 }); // White walls
+    
+    // Base tier
+    const base = new THREE.Mesh(new THREE.BoxGeometry(20, 15, 20), wallMat);
+    base.position.y = 7.5;
+    castle.add(base);
+    
+    // Roof 1
+    const roof1 = new THREE.Mesh(new THREE.ConeGeometry(18, 8, 4), roofMat);
+    roof1.position.y = 15;
+    roof1.rotation.y = Math.PI/4;
+    castle.add(roof1);
+    
+    // Tier 2
+    const tier2 = new THREE.Mesh(new THREE.BoxGeometry(12, 10, 12), wallMat);
+    tier2.position.y = 20;
+    castle.add(tier2);
+
+    // Roof 2
+    const roof2 = new THREE.Mesh(new THREE.ConeGeometry(10, 6, 4), roofMat);
+    roof2.position.y = 26;
+    roof2.rotation.y = Math.PI/4;
+    castle.add(roof2);
+
+    castle.position.set(250, 60, -200); // Further back
+    castle.scale.setScalar(3.5); // Slightly smaller
+    this.group.add(castle);
+
+    // 2. Torii Gate (Finish Line Area)
+    const p0 = points[0];
+    const p1 = points[1];
+    const angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+    
+    const torii = new THREE.Group();
+    const toriiMat = new THREE.MeshStandardMaterial({ 
+        color: 0xe74c3c, 
+        roughness: 0.3,
+        emissive: 0x330000, // Very subtle dark red glow for depth
+        emissiveIntensity: 1.0
     });
-    this.group.add(new THREE.Mesh(leftGravelGeo, gravelMat));
-    const rightGravelGeo = this._buildEdgeStrip(points, -gravelEnd, -pavedEnd, 0.02);
-    this.group.add(new THREE.Mesh(rightGravelGeo, gravelMat.clone()));
+    
+    // Pillars (Slightly shorter and thinner)
+    const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
+    lp.position.set(this.trackWidth/2 + 1.5, 6, 0);
+    torii.add(lp);
+    
+    const rp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
+    rp.position.set(-(this.trackWidth/2 + 1.5), 6, 0);
+    torii.add(rp);
+    
+    // Top Beam
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 6, 1.2, 1.5), toriiMat);
+    beam.position.y = 11;
+    torii.add(beam);
+    
+    const beamTop = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 10, 1.0, 2.0), toriiMat);
+    beamTop.position.y = 12.5;
+    torii.add(beamTop);
+
+    torii.position.set(p0.x, p0.y, p0.z);
+    torii.rotation.y = angle;
+    this.group.add(torii);
+  }
+
+  /* ── Question Blocks (Rotating) ── */
+  _buildQuestionBlocks(points) {
+    const blockGeo = new THREE.BoxGeometry(3, 3, 3);
+    const blockMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffaa00, emissiveIntensity: 0.5 });
+    
+    // Place a few blocks at key points
+    const indices = [Math.floor(points.length * 0.2), Math.floor(points.length * 0.5), Math.floor(points.length * 0.8)];
+    
+    this.questionBlocks = [];
+    for (const idx of indices) {
+        const p = points[idx];
+        const block = new THREE.Mesh(blockGeo, blockMat);
+        block.position.set(p.x, (p.y||0) + 8, p.z);
+        this.group.add(block);
+        this.questionBlocks.push(block);
+    }
   }
 
   /* ── Center dashed line ── */
   _buildCenterLine(points) {
     const dashLength = 3;
-    const gapLength = 4;
-    let accumulated = 0;
-    let drawing = true;
+    const gapLength = 6;
     const positions = [];
 
-    for (let i = 0; i < points.length; i++) {
+    for (let i = 0; i < points.length; i += 2) {
       const p = points[i];
-      if (i > 0) {
-        const prev = points[i - 1];
-        const dx = p.x - prev.x;
-        const dz = p.z - prev.z;
-        accumulated += Math.sqrt(dx * dx + dz * dz);
-      }
-
-      const threshold = drawing ? dashLength : gapLength;
-      if (accumulated > threshold) {
-        drawing = !drawing;
-        accumulated = 0;
-      }
-
-      if (drawing) {
-        positions.push(p.x, 0.2, p.z);
+      if (Math.floor(i / 10) % 2 === 0) {
+        positions.push(p.x, p.y + 0.22, p.z);
       }
     }
 
@@ -193,9 +471,10 @@ export class Track3D {
       const mat = new THREE.LineBasicMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: 0.1,
+        opacity: 0.25,
       });
-      this.group.add(new THREE.Line(geo, mat));
+      const centerLine = new THREE.Line(geo, mat);
+      this.group.add(centerLine);
     }
   }
 
@@ -205,14 +484,22 @@ export class Track3D {
     const p0 = points[0];
     const p1 = points[1];
     const angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+    
+    // Calculate pitch for the start line
+    const dx = p1.x - p0.x;
+    const dz = p1.z - p0.z;
+    const dy = p1.y - p0.y;
+    const lenXZ = Math.sqrt(dx*dx + dz*dz) || 1;
+    const pitch = Math.atan2(dy, lenXZ);
 
     const checkerSize = 1.2;
     const cols = Math.ceil(this.trackWidth / checkerSize);
     const rows = 3;
 
     const checkerGroup = new THREE.Group();
-    checkerGroup.position.set(p0.x, 0.12, p0.z);
+    checkerGroup.position.set(p0.x, p0.y + 0.12, p0.z);
     checkerGroup.rotation.y = angle;
+    checkerGroup.rotation.x = -pitch;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -237,8 +524,9 @@ export class Track3D {
 
     // ── Professional Start/Finish Gantry ──
     const gantryGroup = new THREE.Group();
-    gantryGroup.position.set(p0.x, 0, p0.z);
+    gantryGroup.position.set(p0.x, p0.y, p0.z);
     gantryGroup.rotation.y = angle;
+    // Don't pitch the gantry so pillars stay vertical, but Y offset is correct
     this.group.add(gantryGroup);
 
     const poleGeo = new THREE.CylinderGeometry(0.4, 0.45, 14, 8);
@@ -252,11 +540,11 @@ export class Track3D {
     rightPole.position.set(-(this.trackWidth / 2 + 4), 7, 0);
     gantryGroup.add(rightPole);
 
-    // Heavy-duty Crossbar with Display Panel
-    const crossBarGeo = new THREE.BoxGeometry(this.trackWidth + 10, 1.5, 2.5);
+    // Start/Finish Gantry (Slightly more compact)
+    const crossBarGeo = new THREE.BoxGeometry(this.trackWidth + 8, 1.2, 2.0);
     const crossBarMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7 });
     const crossBar = new THREE.Mesh(crossBarGeo, crossBarMat);
-    crossBar.position.set(0, 14, 0);
+    crossBar.position.set(0, 11, 0);
     gantryGroup.add(crossBar);
 
     // Central Status Panel (F1 Logo / Status)
@@ -265,7 +553,7 @@ export class Track3D {
     panelCanvas.width = 512;
     panelCanvas.height = 256;
     const pctx = panelCanvas.getContext('2d');
-    pctx.fillStyle = '#000000';
+    pctx.fillStyle = '#000000ff';
     pctx.fillRect(0, 0, 512, 256);
     pctx.fillStyle = '#e10600'; // F1 Red
     pctx.font = 'bold 120px "Outfit", sans-serif';
@@ -333,7 +621,7 @@ export class Track3D {
     });
   }
 
-  /* ── DRS Zones ── */
+  /* ── DRS Zones (Mario Kart Style Glowing Cyan) ── */
   _buildDRSZones(points) {
     if (!this.drsZones || this.drsZones.length === 0) return;
 
@@ -341,7 +629,6 @@ export class Track3D {
       const startIdx = Math.floor(zone.start * points.length) % points.length;
       const endIdx = Math.floor(zone.end * points.length) % points.length;
 
-      // Extract a slice of the track for DRS
       const drsPoints = [];
       let i = startIdx;
       let steps = 0;
@@ -354,85 +641,87 @@ export class Track3D {
 
       if (drsPoints.length < 2) continue;
 
-      const { geometry } = this._extrudeTrackStrip(drsPoints, this.trackWidth - 1, {
-        yOffset: 0.15,
+      const { geometry: drsGeo } = this._extrudeTrackStrip(drsPoints, this.trackWidth - 0.5, {
+        yOffset: 0.22,
+        closeLoop: false // CRITICAL: DRS is an open segment
       });
 
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x00c853,
+      const drsMat = new THREE.MeshStandardMaterial({
+        color: 0x00ffff,
         transparent: true,
-        opacity: 0.3,
-        emissive: 0x00c853,
-        emissiveIntensity: 0.3,
-        roughness: 0.6,
+        opacity: 0.25,
+        emissive: 0x00ffff,
+        emissiveIntensity: 0.6,
+        side: THREE.DoubleSide
       });
 
-      this.group.add(new THREE.Mesh(geometry, mat));
-
-      // DRS start marker — glowing beacon
-      const sp = drsPoints[0];
-      const beaconGeo = new THREE.CylinderGeometry(0.5, 0.5, 5, 8);
-      const beaconMat = new THREE.MeshStandardMaterial({
-        color: 0x00ff88,
-        emissive: 0x00ff88,
-        emissiveIntensity: 1.0,
-      });
-      const beacon = new THREE.Mesh(beaconGeo, beaconMat);
-      beacon.position.set(sp.x, 2.5, sp.z);
-      this.group.add(beacon);
+      this.group.add(new THREE.Mesh(drsGeo, drsMat));
     }
   }
 
-  /* ── Sector Markers ── */
+  /* ── Sector Markers (Japan Themed Lanterns) ── */
   _buildSectorMarkers(points) {
-    const indices = this.sectorIndices.length > 0
-      ? this.sectorIndices
-      : [Math.floor(points.length / 3), Math.floor(points.length * 2 / 3)];
-
-    const colors = [0xe10600, 0x0066ff];
-    const labels = ['S1/S2', 'S2/S3'];
+    const indices = this.sectorIndices.length > 0 ? this.sectorIndices : [Math.floor(points.length / 3), Math.floor(points.length * 2 / 3)];
 
     indices.forEach((idx, i) => {
       if (idx < 0 || idx >= points.length) return;
       const p = points[idx];
-      const col = colors[i % colors.length];
+      const color = (i % 2 === 0) ? 0xe74c3c : 0xf1c40f; // Red or Yellow
 
-      // Vertical pole
-      const poleGeo = new THREE.CylinderGeometry(0.3, 0.3, 8, 6);
-      const poleMat = new THREE.MeshStandardMaterial({
-        color: col,
-        emissive: col,
-        emissiveIntensity: 0.5,
+      // Glowing Ground Strip
+      const { geometry: stripGeo } = this._extrudeTrackStrip([points[idx], points[(idx+1)%points.length]], this.trackWidth, { 
+        yOffset: 0.23,
+        closeLoop: false // CRITICAL: Sector line is an open segment
       });
-      const pole = new THREE.Mesh(poleGeo, poleMat);
-      pole.position.set(p.x, 4, p.z);
-      this.group.add(pole);
+      const stripMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.0 });
+      this.group.add(new THREE.Mesh(stripGeo, stripMat));
 
-      // Label sprite
-      this._addTextSprite(labels[i] || `S${i + 1}`, p.x, 10, p.z, col);
+      // Japan Paper Lanterns on sides
+      const createLantern = (offset) => {
+          const lGroup = new THREE.Group();
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 3, 8), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color, emissiveIntensity: 0.8 }));
+          lGroup.add(body);
+          const top = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.4, 2.8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+          top.position.y = 1.7;
+          lGroup.add(top);
+          
+          lGroup.position.set(p.x + offset.x, (p.y||0) + 10, p.z + offset.z);
+          this.group.add(lGroup);
+      };
+
+      const nx = -(points[(idx+1)%points.length].z - points[idx].z);
+      const nz = (points[(idx+1)%points.length].x - points[idx].x);
+      const len = Math.sqrt(nx*nx + nz*nz) || 1;
+      const offX = nx/len * (this.trackWidth/2 + 5);
+      const offZ = nz/len * (this.trackWidth/2 + 5);
+
+      createLantern({ x: offX, z: offZ });
+      createLantern({ x: -offX, z: -offZ });
+
+      this._addTextSprite(`SECTOR ${i+1}`, p.x, 15, p.z, color);
     });
   }
 
   /* ── Pit Lane ── */
   _buildPitLane(points) {
-    // Pit asphalt
-    const { geometry } = this._extrudeTrackStrip(points, this.pitLaneWidth, {
-      yOffset: 0.08,
+    // Extrude the pit lane surface
+    const { geometry, material } = this._extrudeTrackStrip(points, this.pitLaneWidth, {
+      color: 0x33333a,
+      roughness: 0.7,
+      metalness: 0.05,
+      yOffset: 0.15,
+      closeLoop: false
     });
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x2a2a2c,   // Pit lane — slightly lighter than main track
-      roughness: 0.85,
-    });
-    const mesh = new THREE.Mesh(geometry, mat);
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     this.group.add(mesh);
 
     // Pit lane edge
-    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 0.1);
+    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 0.15, false);
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0x444450 });
     this.group.add(new THREE.Mesh(edgeGeo, edgeMat));
 
-    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 0.1);
+    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 0.15, false);
     this.group.add(new THREE.Mesh(edgeGeo2, edgeMat.clone()));
   }
 
@@ -460,22 +749,35 @@ export class Track3D {
 
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
-      const pNext = points[(i + 1) % points.length];
-      const pPrev = points[(i - 1 + points.length) % points.length];
-
-      // Tangent direction
-      const tx = pNext.x - pPrev.x;
-      const tz = pNext.z - pPrev.z;
+      const isLoop = opts.closeLoop !== false;
+      
+      let tx, tz;
+      if (isLoop) {
+        const pNext = points[(i + 1) % points.length];
+        const pPrev = points[(i - 1 + points.length) % points.length];
+        tx = pNext.x - pPrev.x;
+        tz = pNext.z - pPrev.z;
+      } else {
+        // Open line: Use forward/backward difference at ends
+        if (i === 0) {
+          tx = points[1].x - p.x;
+          tz = points[1].z - p.z;
+        } else if (i === points.length - 1) {
+          tx = p.x - points[i - 1].x;
+          tz = p.z - points[i - 1].z;
+        } else {
+          tx = points[i + 1].x - points[i - 1].x;
+          tz = points[i + 1].z - points[i - 1].z;
+        }
+      }
+      
       const len = Math.sqrt(tx * tx + tz * tz) || 1;
-
-      // Normal (perpendicular to tangent, in XZ plane)
       const nx = -tz / len;
       const nz = tx / len;
 
-      // Left and right vertices
       vertices.push(
-        p.x + nx * halfW, yOffset, p.z + nz * halfW,
-        p.x - nx * halfW, yOffset, p.z - nz * halfW
+        p.x + nx * halfW, (p.y || 0) + yOffset, p.z + nz * halfW,
+        p.x - nx * halfW, (p.y || 0) + yOffset, p.z - nz * halfW
       );
 
       normals.push(0, 1, 0, 0, 1, 0);
@@ -490,9 +792,11 @@ export class Track3D {
     }
 
     // Close the loop
-    const last = (points.length - 1) * 2;
-    indices.push(last, last + 1, 0);
-    indices.push(last + 1, 1, 0);
+    if (opts.closeLoop !== false) {
+      const last = (points.length - 1) * 2;
+      indices.push(last, last + 1, 0);
+      indices.push(last + 1, 1, 0);
+    }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
@@ -509,25 +813,41 @@ export class Track3D {
    * Build an edge strip offset from track centerline.
    * offsetInner/offsetOuter are signed distances from center.
    */
-  _buildEdgeStrip(points, offsetInner, offsetOuter, yOffset = 0.12) {
+  _buildEdgeStrip(points, offsetInner, offsetOuter, yOffset = 0.12, closeLoop = true) {
     const vertices = [];
     const indices = [];
     const normals = [];
 
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
-      const pNext = points[(i + 1) % points.length];
-      const pPrev = points[(i - 1 + points.length) % points.length];
-
-      const tx = pNext.x - pPrev.x;
-      const tz = pNext.z - pPrev.z;
+      const isLoop = closeLoop !== false;
+      
+      let tx, tz;
+      if (isLoop) {
+        const pNext = points[(i + 1) % points.length];
+        const pPrev = points[(i - 1 + points.length) % points.length];
+        tx = pNext.x - pPrev.x;
+        tz = pNext.z - pPrev.z;
+      } else {
+        if (i === 0) {
+          tx = points[1].x - p.x;
+          tz = points[1].z - p.z;
+        } else if (i === points.length - 1) {
+          tx = p.x - points[i - 1].x;
+          tz = p.z - points[i - 1].z;
+        } else {
+          tx = points[i + 1].x - points[i - 1].x;
+          tz = points[i + 1].z - points[i - 1].z;
+        }
+      }
+      
       const len = Math.sqrt(tx * tx + tz * tz) || 1;
       const nx = -tz / len;
       const nz = tx / len;
 
       vertices.push(
-        p.x + nx * offsetInner, yOffset, p.z + nz * offsetInner,
-        p.x + nx * offsetOuter, yOffset, p.z + nz * offsetOuter
+        p.x + nx * offsetInner, (p.y || 0) + yOffset, p.z + nz * offsetInner,
+        p.x + nx * offsetOuter, (p.y || 0) + yOffset, p.z + nz * offsetOuter
       );
       normals.push(0, 1, 0, 0, 1, 0);
 
@@ -539,9 +859,11 @@ export class Track3D {
     }
 
     // Close loop
-    const last = (points.length - 1) * 2;
-    indices.push(last, last + 1, 0);
-    indices.push(last + 1, 1, 0);
+    if (closeLoop !== false) {
+      const last = (points.length - 1) * 2;
+      indices.push(last, last + 1, 0);
+      indices.push(last + 1, 1, 0);
+    }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
@@ -549,6 +871,60 @@ export class Track3D {
     geo.setIndex(indices);
 
     return geo;
+  }
+
+  /**
+   * Build a vertical skirt to hide the underside of floating tracks.
+   */
+  _buildVerticalSkirt(points, offset, topYOffset, bottomYOffset) {
+    const vertices = [];
+    const indices = [];
+
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const pNext = points[(i + 1) % points.length];
+        const pPrev = points[(i - 1 + points.length) % points.length];
+  
+        const tx = pNext.x - pPrev.x;
+        const tz = pNext.z - pPrev.z;
+        const len = Math.sqrt(tx * tx + tz * tz) || 1;
+        const nx = -tz / len;
+        const nz = tx / len;
+  
+        vertices.push(
+          p.x + nx * offset, (p.y || 0) + topYOffset, p.z + nz * offset,
+          p.x + nx * offset, bottomYOffset, p.z + nz * offset
+        );
+  
+        if (i < points.length - 1) {
+          const base = i * 2;
+          // Triangle order matters for culling. Assuming offset is outer wall.
+          if (offset > 0) {
+              indices.push(base, base + 2, base + 1);
+              indices.push(base + 1, base + 2, base + 3);
+          } else {
+              indices.push(base, base + 1, base + 2);
+              indices.push(base + 1, base + 3, base + 2);
+          }
+        }
+      }
+  
+      // Close loop
+      const last = (points.length - 1) * 2;
+      if (offset > 0) {
+          indices.push(last, 0, last + 1);
+          indices.push(last + 1, 0, 1);
+      } else {
+          indices.push(last, last + 1, 0);
+          indices.push(last + 1, 1, 0);
+      }
+  
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      geo.computeVertexNormals();
+      geo.setIndex(indices);
+  
+      return geo;
   }
 
   /**
@@ -606,15 +982,20 @@ export class Track3D {
           points[fromIdx].x - points[toIdx].x,
           points[fromIdx].z - points[toIdx].z
         );
+        const yDist = points[fromIdx].y - points[toIdx].y;
+        const pitchAngle = Math.atan2(yDist, segLen);
+        
         return {
           x: points[fromIdx].x + dx * t,
+          y: points[fromIdx].y + (points[toIdx].y - points[fromIdx].y) * t,
           z: points[fromIdx].z + dz * t,
           angle: fwdAngle,
+          pitch: pitchAngle,
         };
       }
       remaining -= segLen;
     }
-    return { x: points[0].x, z: points[0].z, angle: 0 };
+    return { x: points[0].x, y: points[0].y, z: points[0].z, angle: 0, pitch: 0 };
   }
 
   /**
@@ -656,9 +1037,12 @@ export class Track3D {
       const geo = new THREE.PlaneGeometry(markerSize, markerSize);
       const marker = new THREE.Mesh(geo, mat);
 
-      marker.position.set(x, 0.15, z);
-      marker.rotation.x = -Math.PI / 2;
-      marker.rotation.z = -pos.angle; // Rotate to LOCAL track heading
+      marker.position.set(x, pos.y + 0.15, z);
+      
+      // We apply pitch then yaw. 
+      marker.rotation.order = 'YXZ';
+      marker.rotation.y = -pos.angle;
+      marker.rotation.x = -Math.PI / 2 - pos.pitch;
       this.group.add(marker);
 
       // White lateral line behind the number
@@ -667,9 +1051,10 @@ export class Track3D {
       const boxGeo = new THREE.PlaneGeometry(markerSize * 1.6, 0.2);
       const boxMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
       const box = new THREE.Mesh(boxGeo, boxMat);
-      box.position.set(x - fwdX * 0.8, 0.14, z - fwdZ * 0.8);
-      box.rotation.x = -Math.PI / 2;
-      box.rotation.z = -pos.angle;
+      box.position.set(x - fwdX * 0.8, pos.y + 0.14, z - fwdZ * 0.8);
+      box.rotation.order = 'YXZ';
+      box.rotation.y = -pos.angle;
+      box.rotation.x = -Math.PI / 2 - pos.pitch;
       this.group.add(box);
     }
   }
@@ -706,7 +1091,7 @@ export class Track3D {
         
         const panel = new THREE.Mesh(panelGeo, panelMat);
         // Place on the left (pit wall)
-        panel.position.set(p.x + Math.cos(ang) * (this.trackWidth/2 + 1), 1.5, p.z - Math.sin(ang) * (this.trackWidth/2 + 1));
+        panel.position.set(p.x + Math.cos(ang) * (this.trackWidth/2 + 1), (p.y||0) + 1.5, p.z - Math.sin(ang) * (this.trackWidth/2 + 1));
         panel.rotation.y = ang;
         this.group.add(panel);
         
@@ -714,6 +1099,61 @@ export class Track3D {
         screen.position.set(0.11, 0, 0); // Offset from panel surface
         screen.rotation.y = Math.PI / 2;
         panel.add(screen);
+    }
+  }
+
+  /**
+   * Build an edge strip with independent height mapping for each edge (Inner vs Outer).
+   * Creates a sloped profile suitable for 3D kerbs.
+   */
+  _buildEdgeStripProfile(points, offsetInner, offsetOuter, heightInner, heightOuter) {
+    const vertices = [];
+    const indices = [];
+    const normals = [];
+
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const pNext = points[(i + 1) % points.length];
+        const pPrev = points[(i - 1 + points.length) % points.length];
+  
+        const tx = pNext.x - pPrev.x;
+        const tz = pNext.z - pPrev.z;
+        const len = Math.sqrt(tx * tx + tz * tz) || 1;
+        const nx = -tz / len;
+        const nz = tx / len;
+  
+        // Vertex 1: Inner
+        vertices.push(p.x + nx * offsetInner, (p.y||0) + heightInner, p.z + nz * offsetInner);
+        // Vertex 2: Outer
+        vertices.push(p.x + nx * offsetOuter, (p.y||0) + heightOuter, p.z + nz * offsetOuter);
+
+        // Face Normal (Approximation pointing mostly up but sloped)
+        const dy = heightOuter - heightInner;
+        const dw = offsetOuter - offsetInner;
+        const slantNormal = new THREE.Vector3(-nx * dy, dw, -nz * dy).normalize();
+        normals.push(slantNormal.x, slantNormal.y, slantNormal.z, slantNormal.x, slantNormal.y, slantNormal.z);
+  
+        if (i < points.length - 1) {
+          const base = i * 2;
+          indices.push(base, base + 1, base + 2);
+          indices.push(base + 1, base + 3, base + 2);
+        }
+      }
+  
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geo.setIndex(indices);
+      return geo;
+  }
+
+  update(timestamp) {
+    if (this.questionBlocks) {
+        for (let i = 0; i < this.questionBlocks.length; i++) {
+            const block = this.questionBlocks[i];
+            block.rotation.y = timestamp * 0.002 + i;
+            block.position.y += Math.sin(timestamp * 0.003 + i) * 0.02;
+        }
     }
   }
 }

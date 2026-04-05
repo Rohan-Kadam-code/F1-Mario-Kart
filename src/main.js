@@ -1098,7 +1098,11 @@ function renderLoop(timestamp) {
           const s = cache.getDriverSpeed(driverNum, currentEpoch);
           kart.speed = (kart.speed * 0.8) + (s * 0.2); // Light smoothing
 
-          kart.updatePosition(world.x, 0, world.z, angle);
+          // Fallback to interpolation progress to get the correct Y and Pitch for this part of the track
+          const progress = getDriverTrackProgress(driverNum, state.currentRaceTime, data.position, totalDrivers);
+          const pos3D = sceneManager.getPositionOnTrack(progress);
+
+          kart.updatePosition(world.x, pos3D.y, world.z, angle, pos3D.pitch);
           kart.progress = 0;
 
           // Star sparkle
@@ -1132,7 +1136,7 @@ function renderLoop(timestamp) {
         pos3D.angle = pos3D.angle * (1 - gridWeight) + slot.angle * gridWeight;
       }
 
-      kart.updatePosition(pos3D.x, pos3D.y, pos3D.z, pos3D.angle);
+      kart.updatePosition(pos3D.x, pos3D.y, pos3D.z, pos3D.angle, pos3D.pitch);
       kart.progress = progress;
 
       // Speed calc

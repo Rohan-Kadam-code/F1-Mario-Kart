@@ -24,6 +24,8 @@ export class Kart3D {
     this.tireCompound = '';
     this.currentAngle = 0;
     this.targetAngle = 0;
+    this.currentPitch = 0;
+    this.targetPitch = 0;
     this.inGarage = false; // Flag to pause track-physics
     this.hasStar = false;
     this.starTimer = 0;
@@ -469,8 +471,8 @@ export class Kart3D {
     ctx.fillStyle = '#ffffff'; ctx.fillText(this.abbreviation, 64, 16);
     const t = new THREE.CanvasTexture(c);
     this.nameSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: false }));
-    this.nameSprite.scale.set(8, 2, 1);
-    this.nameSprite.position.set(0, 5, 0);
+    this.nameSprite.scale.set(5, 1.25, 1); // Reduced from (8, 2)
+    this.nameSprite.position.set(0, 4.2, 0); // Lowered from 5
     this.mesh.add(this.nameSprite);
   }
 
@@ -479,8 +481,8 @@ export class Kart3D {
     this._posBadgeCanvas.width = 64; this._posBadgeCanvas.height = 64;
     this._posBadgeTexture = new THREE.CanvasTexture(this._posBadgeCanvas);
     this.posBadgeSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this._posBadgeTexture, transparent: true, depthTest: false }));
-    this.posBadgeSprite.scale.set(3, 3, 1);
-    this.posBadgeSprite.position.set(3, 4, 0);
+    this.posBadgeSprite.scale.set(2, 2, 1); // Reduced from (3, 3)
+    this.posBadgeSprite.position.set(2.2, 3.5, 0); // Lowered and brought closer
     this.mesh.add(this.posBadgeSprite);
     this._updatePositionBadge();
   }
@@ -503,9 +505,10 @@ export class Kart3D {
     this._posBadgeTexture.needsUpdate = true;
   }
 
-  updatePosition(worldX, worldY, worldZ, angle) {
+  updatePosition(worldX, worldY, worldZ, angle, pitch = 0) {
     this._targetPos.set(worldX, worldY || 0, worldZ);
     this.targetAngle = angle;
+    this.targetPitch = pitch;
   }
 
   // ── Garage Customization Setters ──
@@ -590,7 +593,13 @@ export class Kart3D {
     while (ad > Math.PI) ad -= Math.PI * 2;
     while (ad < -Math.PI) ad += Math.PI * 2;
     this.currentAngle += ad * this._angleLerpFactor;
+
+    let pd = this.targetPitch - this.currentPitch;
+    this.currentPitch += pd * this._angleLerpFactor;
+
+    this.mesh.rotation.order = 'YXZ'; // Yaw first, then pitch
     this.mesh.rotation.y = this.currentAngle;
+    this.mesh.rotation.x = this.currentPitch; // Pitch the chassis
 
     // ── Advanced Animations ──
 
