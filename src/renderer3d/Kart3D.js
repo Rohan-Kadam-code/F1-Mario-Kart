@@ -215,12 +215,12 @@ export class Kart3D {
     this.chassis.add(helmet);
 
     // Rear Wing (Multi-Element: Mainplane + Flap)
-    const rwMain = new THREE.Mesh(new RoundedBoxGeometry(3.0, 0.08, 0.6, 2, 0.04), wingMat);
+    const rwMain = new THREE.Mesh(new RoundedBoxGeometry(3.6, 0.08, 0.6, 2, 0.04), wingMat);
     rwMain.position.set(0, 2.1, -3.2);
     this.rearWing = rwMain; // Link for DRS
     this.chassis.add(rwMain);
 
-    const rwFlap = new THREE.Mesh(new RoundedBoxGeometry(3.0, 0.06, 0.4, 2, 0.04), wingMat);
+    const rwFlap = new THREE.Mesh(new RoundedBoxGeometry(3.6, 0.06, 0.4, 2, 0.04), wingMat);
     rwFlap.position.set(0, 2.25, -3.25);
     rwFlap.rotation.x = -0.2;
     this.chassis.add(rwFlap);
@@ -245,11 +245,11 @@ export class Kart3D {
     // --- NEW: Endplate LED Strips ---
     const ledMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff0000, emissiveIntensity: 2.0 });
     const ledGeo = new THREE.BoxGeometry(0.12, 0.6, 0.05);
-    const leftLed = new THREE.Mesh(ledGeo, ledMat); leftLed.position.set(1.5, 1.6, -3.8); this.chassis.add(leftLed);
-    const rightLed = new THREE.Mesh(ledGeo, ledMat); rightLed.position.set(-1.5, 1.6, -3.8); this.chassis.add(rightLed);
+    const leftLed = new THREE.Mesh(ledGeo, ledMat); leftLed.position.set(1.8, 1.6, -3.8); this.chassis.add(leftLed);
+    const rightLed = new THREE.Mesh(ledGeo, ledMat); rightLed.position.set(-1.8, 1.6, -3.8); this.chassis.add(rightLed);
 
     // --- NEW: Beam Wing (Lower Rear Wing) ---
-    const beamWing = new THREE.Mesh(new RoundedBoxGeometry(2.0, 0.05, 0.4, 2, 0.02), carbonMat);
+    const beamWing = new THREE.Mesh(new RoundedBoxGeometry(2.8, 0.05, 0.4, 2, 0.02), carbonMat);
     beamWing.position.set(0, 1.0, -2.8);
     beamWing.rotation.x = -0.15;
     this.chassis.add(beamWing);
