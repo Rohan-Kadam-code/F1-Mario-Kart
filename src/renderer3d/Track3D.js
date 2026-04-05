@@ -235,47 +235,83 @@ export class Track3D {
 
     this.group.add(checkerGroup);
 
-    // Start/finish gantry (simple arch)
-    const poleGeo = new THREE.CylinderGeometry(0.3, 0.3, 12, 8);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.6, roughness: 0.3 });
+    // ── Professional Start/Finish Gantry ──
+    const gantryGroup = new THREE.Group();
+    gantryGroup.position.set(p0.x, 0, p0.z);
+    gantryGroup.rotation.y = angle;
+    this.group.add(gantryGroup);
+
+    const poleGeo = new THREE.CylinderGeometry(0.4, 0.45, 14, 8);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.8, roughness: 0.2 });
 
     const leftPole = new THREE.Mesh(poleGeo, poleMat);
-    leftPole.position.set(p0.x + Math.cos(angle) * (this.trackWidth / 2 + 3), 6, p0.z - Math.sin(angle) * (this.trackWidth / 2 + 3));
-    this.group.add(leftPole);
+    leftPole.position.set(this.trackWidth / 2 + 4, 7, 0);
+    gantryGroup.add(leftPole);
 
     const rightPole = new THREE.Mesh(poleGeo, poleMat);
-    rightPole.position.set(p0.x - Math.cos(angle) * (this.trackWidth / 2 + 3), 6, p0.z + Math.sin(angle) * (this.trackWidth / 2 + 3));
-    this.group.add(rightPole);
+    rightPole.position.set(-(this.trackWidth / 2 + 4), 7, 0);
+    gantryGroup.add(rightPole);
 
-    // Crossbar
-    const crossGeo = new THREE.BoxGeometry(this.trackWidth + 8, 1, 1.5);
-    const crossMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.5 });
-    const cross = new THREE.Mesh(crossGeo, crossMat);
-    cross.position.set(p0.x, 12, p0.z);
-    cross.rotation.y = angle;
-    this.group.add(cross);
+    // Heavy-duty Crossbar with Display Panel
+    const crossBarGeo = new THREE.BoxGeometry(this.trackWidth + 10, 1.5, 2.5);
+    const crossBarMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7 });
+    const crossBar = new THREE.Mesh(crossBarGeo, crossBarMat);
+    crossBar.position.set(0, 14, 0);
+    gantryGroup.add(crossBar);
 
-    // F1 Start Lights (5 Red LED Pairs)
+    // Central Status Panel (F1 Logo / Status)
+    const panelGeo = new THREE.PlaneGeometry(8, 3.5);
+    const panelCanvas = document.createElement('canvas');
+    panelCanvas.width = 512;
+    panelCanvas.height = 256;
+    const pctx = panelCanvas.getContext('2d');
+    pctx.fillStyle = '#000000';
+    pctx.fillRect(0, 0, 512, 256);
+    pctx.fillStyle = '#e10600'; // F1 Red
+    pctx.font = 'bold 120px "Outfit", sans-serif';
+    pctx.textAlign = 'center';
+    pctx.textBaseline = 'middle';
+    pctx.fillText('F1', 256, 128);
+    
+    // Add border to panel
+    pctx.strokeStyle = '#ffffff';
+    pctx.lineWidth = 10;
+    pctx.strokeRect(5, 5, 502, 246);
+
+    const panelTex = new THREE.CanvasTexture(panelCanvas);
+    const panelMat = new THREE.MeshBasicMaterial({ map: panelTex });
+    const statusPanel = new THREE.Mesh(panelGeo, panelMat);
+    statusPanel.position.set(0, 0, 1.3); // Facing track
+    crossBar.add(statusPanel);
+
+    // F1 Start Lights (5 Red LED Pairs, scaled per the reference gantry)
     this.startLights = [];
-    const ledGeo = new THREE.SphereGeometry(0.4, 8, 8);
-    const ledOffMat = new THREE.MeshStandardMaterial({ color: 0x221111, roughness: 0.8 });
+    const ledGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 16);
+    const ledOffMat = new THREE.MeshStandardMaterial({ color: 0x110505, roughness: 0.9 });
     
     for (let i = 0; i < 5; i++) {
-        const ledGroup = new THREE.Group();
-        // Red LED Top
+        const lightBoxGeo = new THREE.BoxGeometry(1.2, 1.8, 0.5);
+        const lightBox = new THREE.Mesh(lightBoxGeo, new THREE.MeshStandardMaterial({ color: 0x0a0a0a }));
+        lightBox.position.set((i - 2) * 1.5, -2, 1.3);
+        crossBar.add(lightBox);
+
         const ledTop = new THREE.Mesh(ledGeo, ledOffMat.clone());
-        ledTop.position.set((i - 2) * 1.8, 0, 0.8); // Offset horizontally on crossbar face
-        ledGroup.add(ledTop);
+        ledTop.rotation.x = Math.PI / 2;
+        ledTop.position.set(0, 0.35, 0.2);
+        lightBox.add(ledTop);
         
-        // Red LED Bottom
         const ledBottom = new THREE.Mesh(ledGeo, ledOffMat.clone());
-        ledBottom.position.set((i - 2) * 1.8, -0.6, 0.8);
-        ledGroup.add(ledBottom);
+        ledBottom.rotation.x = Math.PI / 2;
+        ledBottom.position.set(0, -0.35, 0.2);
+        lightBox.add(ledBottom);
         
-        ledGroup.position.set(0, 0, 0); // Relative to cross
-        cross.add(ledGroup);
         this.startLights.push({ top: ledTop, bottom: ledBottom });
     }
+
+    // Process Grid Markers
+    this._buildGridMarkers(points, angle);
+    // Process Marshal Panels
+    this._buildMarshalPanels(points);
   }
 
   /**
@@ -545,5 +581,139 @@ export class Track3D {
     sprite.position.set(x, y, z);
     sprite.scale.set(canvasW / 4, canvasH / 4, 1);
     this.group.add(sprite);
+  }
+
+  /**
+   * Walk backward along a closed track path by a given distance (meters).
+   * Returns { x, z, angle } where angle is the forward racing direction.
+   * points[0] = start/finish, points[N-1] = last point before the line.
+   * "Backward" means: 0 → N-1 → N-2 → ... (against racing direction).
+   */
+  _walkBackFromStart(points, distance) {
+    let remaining = distance;
+    for (let step = 0; step < points.length; step++) {
+      const fromIdx = (points.length - step) % points.length;   // 0, N-1, N-2, ...
+      const toIdx   = (points.length - step - 1) % points.length; // N-1, N-2, N-3, ...
+
+      const dx = points[toIdx].x - points[fromIdx].x;
+      const dz = points[toIdx].z - points[fromIdx].z;
+      const segLen = Math.sqrt(dx * dx + dz * dz);
+
+      if (remaining <= segLen && segLen > 0) {
+        const t = remaining / segLen;
+        // Forward racing direction: from toIdx toward fromIdx (toward start)
+        const fwdAngle = Math.atan2(
+          points[fromIdx].x - points[toIdx].x,
+          points[fromIdx].z - points[toIdx].z
+        );
+        return {
+          x: points[fromIdx].x + dx * t,
+          z: points[fromIdx].z + dz * t,
+          angle: fwdAngle,
+        };
+      }
+      remaining -= segLen;
+    }
+    return { x: points[0].x, z: points[0].z, angle: 0 };
+  }
+
+  /**
+   * Build staggered grid numbers 1-20 on the track surface.
+   * Walks backward along the actual track path so markers follow the curve.
+   */
+  _buildGridMarkers(points, angle) {
+    if (points.length < 3) return;
+
+    const isPoleRight = !this.circuitData || (this.circuitData.poleSide !== 'left');
+    const lateralShift = 4.0;
+    const markerSize = 2.5;
+    const gridSpacing = 8; // meters between grid rows
+
+    for (let i = 0; i < 20; i++) {
+      const distance = 2 + i * gridSpacing;
+      const pos = this._walkBackFromStart(points, distance);
+      const isRightSlot = (i % 2 === 0) ? isPoleRight : !isPoleRight;
+
+      // Lateral offset using the local track angle at this point
+      const rightX = Math.cos(pos.angle);
+      const rightZ = -Math.sin(pos.angle);
+      const x = pos.x + rightX * (isRightSlot ? lateralShift : -lateralShift);
+      const z = pos.z + rightZ * (isRightSlot ? lateralShift : -lateralShift);
+
+      // Draw grid position number on asphalt
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.font = 'bold 100px "Outfit", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(i + 1, 64, 64);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, polygonOffset: true, polygonOffsetFactor: -4 });
+      const geo = new THREE.PlaneGeometry(markerSize, markerSize);
+      const marker = new THREE.Mesh(geo, mat);
+
+      marker.position.set(x, 0.15, z);
+      marker.rotation.x = -Math.PI / 2;
+      marker.rotation.z = -pos.angle; // Rotate to LOCAL track heading
+      this.group.add(marker);
+
+      // White lateral line behind the number
+      const fwdX = Math.sin(pos.angle);
+      const fwdZ = Math.cos(pos.angle);
+      const boxGeo = new THREE.PlaneGeometry(markerSize * 1.6, 0.2);
+      const boxMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
+      const box = new THREE.Mesh(boxGeo, boxMat);
+      box.position.set(x - fwdX * 0.8, 0.14, z - fwdZ * 0.8);
+      box.rotation.x = -Math.PI / 2;
+      box.rotation.z = -pos.angle;
+      this.group.add(box);
+    }
+  }
+
+  /**
+   * Add digital LED flag boards along the track periphery.
+   */
+  _buildMarshalPanels(points) {
+    const spacing = 15; // Point indices
+    const panelGeo = new THREE.BoxGeometry(0.2, 1.2, 1.8);
+    const screenGeo = new THREE.PlaneGeometry(1.7, 1.1);
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+    
+    // Green Status Screen
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = '#00ff00';
+    // Draw 4x4 LED grid pattern
+    for(let x=0; x<4; x++) for(let y=0; y<4; y++) ctx.fillRect(x*32+4, y*32+4, 24, 24);
+    
+    const screenTex = new THREE.CanvasTexture(canvas);
+    const screenMat = new THREE.MeshBasicMaterial({ map: screenTex, emissive: 0x00ff00, emissiveIntensity: 1 });
+
+    for (let i = 0; i < points.length; i += spacing) {
+        if (i > points.length * 0.15) break; // Only first 15% (Pit wall area)
+        
+        const p = points[i];
+        const p1 = points[(i + 1) % points.length];
+        const ang = Math.atan2(p1.x - p.x, p1.z - p.z) + Math.PI/2;
+        
+        const panel = new THREE.Mesh(panelGeo, panelMat);
+        // Place on the left (pit wall)
+        panel.position.set(p.x + Math.cos(ang) * (this.trackWidth/2 + 1), 1.5, p.z - Math.sin(ang) * (this.trackWidth/2 + 1));
+        panel.rotation.y = ang;
+        this.group.add(panel);
+        
+        const screen = new THREE.Mesh(screenGeo, screenMat);
+        screen.position.set(0.11, 0, 0); // Offset from panel surface
+        screen.rotation.y = Math.PI / 2;
+        panel.add(screen);
+    }
   }
 }

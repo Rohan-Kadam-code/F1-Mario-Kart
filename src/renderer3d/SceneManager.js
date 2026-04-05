@@ -56,7 +56,11 @@ export class SceneManager {
     this.chaseTarget = null;       // Kart3D instance to follow
     this.chaseLerpSpeed = 0.1;    // Faster lock
     this.tcamLerpSpeed = 0.3;     // Rock-solid onboard
-
+    
+    // ── Garage state ──
+    this.garageMode = false;
+    this.garageTarget = null;
+    this._setupGarageEnvironment();
 
     // ── Orbit state (isometric view) ──
     this.orbitTheta = 0;            // horizontal angle (radians)
@@ -128,6 +132,173 @@ export class SceneManager {
     this.scene.add(this.sunLight.target);
   }
 
+  _createStudioBackground() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(64, 64, 16, 64, 64, 128);
+    grad.addColorStop(0, '#f8f8f8'); // Off-White
+    grad.addColorStop(1, '#c0c0c0'); // Silver Studio
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /* =========================================
+     Garage Environment
+     ========================================= */
+
+  _setupGarageEnvironment() {
+    this.garageGroup = new THREE.Group();
+    this.garageGroup.visible = false;
+    this.scene.add(this.garageGroup);
+
+    // Premium Physical Floor (Light Studio)
+    const floorGeo = new THREE.PlaneGeometry(1000, 1000);
+    const floorMat = new THREE.MeshPhysicalMaterial({ 
+      color: 0xcccccc, 
+      roughness: 0.2, 
+      metalness: 0.1,
+      clearcoat: 0.8, 
+      clearcoatRoughness: 0.2,
+      reflectivity: 0.5
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.garageGroup.add(floor);
+
+    // 1. Key Light (Main highlight)
+    this.keyLight = new THREE.SpotLight(0xffffff, 500);
+    this.keyLight.position.set(-20, 30, 20);
+    this.keyLight.angle = Math.PI / 6;
+    this.keyLight.penumbra = 0.5;
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.width = 1024;
+    this.keyLight.shadow.mapSize.height = 1024;
+    this.garageGroup.add(this.keyLight);
+    
+    // 2. Fill Light (Soften shadows)
+    this.fillLight = new THREE.RectAreaLight(0xfff5e6, 2, 40, 20);
+    this.fillLight.position.set(30, 10, 10);
+    this.fillLight.lookAt(0, 0, 0);
+    this.garageGroup.add(this.fillLight);
+
+    // 3. Rim Light (Edge highlights)
+    this.rimLight = new THREE.SpotLight(0xccddff, 800);
+    this.rimLight.position.set(0, 40, -30);
+    this.rimLight.angle = Math.PI / 4;
+    this.rimLight.penumbra = 1.0;
+    this.garageGroup.add(this.rimLight);
+    
+    // --- NEW: Podium Base ---
+    const podiumGeo = new THREE.CylinderGeometry(5, 5, 0.7, 64);
+    const podiumMat = new THREE.MeshPhysicalMaterial({ 
+      color: 0x222222, 
+      roughness: 0.3,
+      metalness: 0.8,
+      clearcoat: 1.0
+    });
+    this.studioBase = new THREE.Mesh(podiumGeo, podiumMat);
+    this.studioBase.position.y = -0.01; // Slightly above floor
+    this.studioBase.receiveShadow = true;
+    this.studioBase.castShadow = true;
+    this.garageGroup.add(this.studioBase);
+    
+    this.studioBackground = this._createStudioBackground();
+  }
+
+  setGarageMode(enabled, kart = null) {
+    this.garageMode = enabled;
+    this.garageGroup.visible = enabled;
+
+    // Toggle track environment visibility
+    if (this.track3D && this.track3D.group) this.track3D.group.visible = !enabled;
+    if (this.environment3D && this.environment3D.group) this.environment3D.group.visible = !enabled;
+    if (this.particles3D) {
+      if (this.particles3D.points) this.particles3D.points.visible = !enabled;
+      if (this.particles3D.rainGroup) this.particles3D.rainGroup.visible = !enabled;
+    }
+
+    // ── Handle Garage Mode ──
+    if (enabled) {
+      // Cleanup previous target if we are switching while in garage mode
+      if (this.garageTarget && this.garageTarget !== kart) {
+        const old = this.garageTarget;
+        old.inGarage = false;
+        old.toggleLabels(true);
+        if (old._storedPos) {
+          old.mesh.position.copy(old._storedPos);
+          old.mesh.rotation.y = old._storedRotY;
+        }
+      }
+
+      this.garageTarget = kart;
+
+      // Ensure all karts except the target are hidden
+      if (this.karts) {
+        this.karts.forEach(k => { k.isVisible = false; });
+      }
+
+      // Setup Studio View
+      this.camera.position.set(10, 5, 12);
+      this.camera.lookAt(0, 0, 0);
+      this.scene.background = this.studioBackground;
+      this.sunLight.intensity = 0.1; // Dim main sun significantly
+
+      if (kart) {
+        kart.isVisible = true; 
+        kart.mesh.visible = true;
+        kart.inGarage = true;
+        kart.toggleLabels(false);
+        // Backup original pos/rot
+        kart._storedPos = kart.mesh.position.clone();
+        kart._storedRotY = kart.mesh.rotation.y;
+        kart.mesh.position.set(0, 0, 0);
+        kart.mesh.rotation.set(0, 0, 0);
+
+        // Adjust camera for studio
+        this.orbitRadius = 15;
+        this.orbitTheta = 0.5;
+        this.orbitPhi = 0.45;
+        this.orbitCenter.set(0, 0, 0);
+
+        // --- NEW: Generate Reflections from Studio ---
+        if (!this._pmrem) this._pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.scene.environment = this._pmrem.fromScene(this.garageGroup).texture;
+      }
+    } else {
+      // Restore ALL karts visibility
+      if (this.karts) {
+        this.karts.forEach(k => { k.isVisible = true; });
+      }
+
+      // Restore
+      this.scene.environment = null; // Clear reflections
+      this.sunLight.intensity = 1.2;
+      this.scene.background = null;
+      if (kart) {
+        kart.inGarage = false;
+        kart.toggleLabels(true);
+        if (kart._storedPos) {
+          kart.mesh.position.copy(kart._storedPos);
+          kart.mesh.rotation.y = kart._storedRotY;
+        }
+      }
+      this.resetView();
+    }
+  }
+
+  updateStudioSettings(settings) {
+    if (this.keyLight) this.keyLight.intensity = settings.intensity;
+    if (this.rimLight) this.rimLight.intensity = settings.intensity * 1.5;
+    if (this.bloomPass) this.bloomPass.strength = settings.bloom;
+    if (this.studioBase) this.studioBase.visible = settings.showBase;
+  }
+
   /* =========================================
      Post-Processing (Bloom)
      ========================================= */
@@ -175,8 +346,10 @@ export class SceneManager {
 
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const factor = e.deltaY > 0 ? 1.08 : 0.93;
-      this.orbitRadius = Math.max(100, Math.min(8000, this.orbitRadius * factor));
+      const factor = e.deltaY > 0 ? 1.05 : 0.95;
+      const minR = this.garageMode ? 2 : 100;
+      const maxR = this.garageMode ? 100 : 8000;
+      this.orbitRadius = Math.max(minR, Math.min(maxR, this.orbitRadius * factor));
       this._breakChaseMode();
     }, { passive: false });
 
@@ -285,11 +458,13 @@ export class SceneManager {
 
   /** Zoom controls */
   zoomIn() {
-    this.orbitRadius = Math.max(100, this.orbitRadius * 0.75);
+    const minR = this.garageMode ? 2 : 100;
+    this.orbitRadius = Math.max(minR, this.orbitRadius * 0.75);
   }
 
   zoomOut() {
-    this.orbitRadius = Math.min(8000, this.orbitRadius * 1.3);
+    const maxR = this.garageMode ? 100 : 8000;
+    this.orbitRadius = Math.min(maxR, this.orbitRadius * 1.3);
   }
 
   resetView() {
@@ -427,6 +602,31 @@ export class SceneManager {
      ========================================= */
 
   render(timestamp) {
+    // ── Handle Garage Mode ──
+    if (this.garageMode && this.garageTarget) {
+      // Turntable rotation (slow auto-spin)
+      this.garageTarget.mesh.rotation.y += 0.005;
+
+      // Orbit Position Logic
+      const r = this.orbitRadius;
+      const theta = this.orbitTheta;
+      const phi = this.orbitPhi;
+      
+      this.camera.position.set(
+        this.orbitCenter.x + r * Math.sin(phi) * Math.sin(theta),
+        this.orbitCenter.y + r * Math.cos(phi),
+        this.orbitCenter.z + r * Math.sin(phi) * Math.cos(theta)
+      );
+      this.camera.lookAt(this.orbitCenter);
+
+      if (this.quality !== 'low' && this.composer) {
+        this.composer.render();
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
+      return;
+    }
+
     // ── Update camera position ──
     if (this.isChaseMode && this.chaseTarget) {
       const kart = this.chaseTarget;

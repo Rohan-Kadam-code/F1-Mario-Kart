@@ -22,6 +22,7 @@ import { DriverPanel } from './components/DriverPanel.js';
 import { PlaybackControls } from './components/PlaybackControls.js';
 import { RaceInfo } from './components/RaceInfo.js';
 import { MiniMap } from './components/MiniMap.js';
+import { GaragePanel } from './components/GaragePanel.js';
 import * as api from './api/openf1.js';
 import { findCircuit } from './data/circuitData.js';
 import { LocationCache } from './data/LocationCache.js';
@@ -156,6 +157,27 @@ const raceInfo = new RaceInfo(
   document.getElementById('weatherWidget')
 );
 
+const garagePanel = new GaragePanel(
+  'garagePanel',
+  [],
+  (kart) => {
+    // On kart changed in garage
+    if (sceneManager.garageMode) sceneManager.setGarageMode(true, kart);
+  },
+  () => {
+    // On close garage
+    sceneManager.setGarageMode(false);
+    garagePanel.hide();
+    document.getElementById('garageToggleBtn').classList.remove('active');
+    document.getElementById('app').classList.remove('garage-active');
+    setTimeout(() => sceneManager.resize(), 100);
+  },
+  (settings) => {
+    // On studio settings change (Lights, Bloom, Base)
+    sceneManager.updateStudioSettings(settings);
+  }
+);
+
 /* ============================================
    Initialise
    ============================================ */
@@ -176,6 +198,7 @@ function init() {
   createZoomControls();
   createQualityControls();
   createCacheIndicator();
+  createGarageControls();
 
   requestAnimationFrame(renderLoop);
   drawWelcomeScreen();
@@ -249,6 +272,35 @@ function drawWelcomeScreen() {
   // We can add a text sprite
 }
 
+function createGarageControls() {
+  const btn = document.getElementById('garageToggleBtn');
+  btn.addEventListener('click', () => {
+    if (state.drivers.length === 0) {
+      alert("Please select and load a Session from the top menu before entering the Garage!");
+      return; 
+    }
+    
+    if (sceneManager.garageMode) {
+      sceneManager.setGarageMode(false);
+      garagePanel.hide();
+      btn.classList.remove('active');
+    } else {
+      // Pause game naturally
+      if (playbackControls.isPlaying) {
+        playbackControls.toggle();
+      }
+      
+      const firstKart = state.karts.values().next().value;
+      garagePanel.show(state.karts);
+      sceneManager.setGarageMode(true, firstKart);
+      btn.classList.add('active');
+      document.getElementById('app').classList.add('garage-active');
+      setTimeout(() => sceneManager.resize(), 100);
+    }
+  });
+}
+
+
 /* ============================================
    Session Loading
    ============================================ */
@@ -290,6 +342,7 @@ async function onSessionSelected(session) {
 
     if (matchedCircuit) {
       console.log(`✅ Matched circuit: ${matchedCircuit.name} (${matchedCircuit.id})`);
+      state.matchedCircuit = matchedCircuit; // Store for render loop (poleSide, etc.)
       // Project lat/lng to 2D for the scene manager
       trackPoints2D = matchedCircuit.trackCoords.map(([lng, lat]) => projectLatLng(lng, lat));
       if (matchedCircuit.pitLane && matchedCircuit.pitLane.length > 2) {
@@ -342,6 +395,32 @@ async function onSessionSelected(session) {
     // Store 2D track data for fallback position calculations
     state.trackPoints2D = trackPoints2D;
     computeArcLengths(trackPoints2D);
+
+    // Compute 3D world track length for distance-based stagger
+    const pts3D = sceneManager.trackPoints3D;
+    let worldTrackLen = 0;
+    for (let i = 1; i < pts3D.length; i++) {
+      const dx = pts3D[i].x - pts3D[i - 1].x;
+      const dz = pts3D[i].z - pts3D[i - 1].z;
+      worldTrackLen += Math.sqrt(dx * dx + dz * dz);
+    }
+    if (pts3D.length > 1) {
+      const dx = pts3D[0].x - pts3D[pts3D.length - 1].x;
+      const dz = pts3D[0].z - pts3D[pts3D.length - 1].z;
+      worldTrackLen += Math.sqrt(dx * dx + dz * dz);
+    }
+    state.worldTrackLength = worldTrackLen;
+    console.log(`[Grid] 3D world track length: ${worldTrackLen.toFixed(0)} units`);
+
+    // Pre-compute 20 grid slot positions by walking backward along the track path.
+    // This guarantees car positioning matches the Track3D grid markers exactly.
+    state.gridSlots = [];
+    for (let slot = 0; slot < 20; slot++) {
+      const distance = 2 + slot * 8; // 2m base + 8m per slot — matches Track3D
+      const pos = walkBackFromStart(pts3D, distance);
+      state.gridSlots.push(pos);
+    }
+    console.log(`[Grid] Pre-computed ${state.gridSlots.length} grid slot positions`);
 
     updateLoadProgress(70);
 
@@ -433,6 +512,36 @@ function computeArcLengths(points) {
     total += Math.sqrt(dx * dx + dy * dy);
   }
   state.totalLength = total;
+}
+
+/**
+ * Walk backward along a closed track path by a given distance.
+ * Returns { x, z, angle } — same logic as Track3D._walkBackFromStart.
+ * points[0] = start/finish, points[N-1] = last point before the line.
+ */
+function walkBackFromStart(points, distance) {
+  let remaining = distance;
+  for (let step = 0; step < points.length; step++) {
+    const fromIdx = (points.length - step) % points.length;
+    const toIdx   = (points.length - step - 1) % points.length;
+    const dx = points[toIdx].x - points[fromIdx].x;
+    const dz = points[toIdx].z - points[fromIdx].z;
+    const segLen = Math.sqrt(dx * dx + dz * dz);
+    if (remaining <= segLen && segLen > 0) {
+      const t = remaining / segLen;
+      const fwdAngle = Math.atan2(
+        points[fromIdx].x - points[toIdx].x,
+        points[fromIdx].z - points[toIdx].z
+      );
+      return {
+        x: points[fromIdx].x + dx * t,
+        z: points[fromIdx].z + dz * t,
+        angle: fwdAngle,
+      };
+    }
+    remaining -= segLen;
+  }
+  return { x: points[0].x, z: points[0].z, angle: 0 };
 }
 
 function showLoading(show) {
@@ -530,12 +639,14 @@ function createKarts() {
   // Dispose old karts
   for (const kart of state.karts.values()) kart.dispose();
   state.karts.clear();
+  sceneManager.karts.clear();
 
   const year = state.session ? (state.session.year || 2026) : 2026;
   state.drivers.forEach(d => {
     const color = getTeamColor(d.team_name, year);
     const kart = new Kart3D(d, color, sceneManager.scene, year);
     state.karts.set(d.driver_number, kart);
+    sceneManager.karts.set(d.driver_number, kart);
   });
 }
 
@@ -620,13 +731,15 @@ function getDriverTrackProgress(driverNum, raceTimeMs, position, totalDrivers) {
         (raceTimeMs - currentLapData.startTime) / currentLapData.duration));
       const totalProgress = state.totalLaps > 0
         ? ((currentLapNum - 1 + lapProgress) / state.totalLaps) : lapProgress;
-      const stagger = (position - 1) * 0.008;
-      return (totalProgress - stagger + 10) % 1;
+      const staggerDistance = 2 + (position - 1) * 8; // Match Track3D: 2m base + 8m per slot
+      const staggerFraction = state.worldTrackLength > 0 ? (staggerDistance / state.worldTrackLength) : 0;
+      return (totalProgress - staggerFraction + 10) % 1;
     }
   }
   const linearProgress = state.raceDuration > 0 ? raceTimeMs / state.raceDuration : 0;
-  const stagger = (position - 1) / Math.max(1, totalDrivers) * 0.06;
-  return ((linearProgress - stagger) + 10) % 1;
+  const staggerDistance = 2 + (position - 1) * 8;
+  const staggerFraction = state.worldTrackLength > 0 ? (staggerDistance / state.worldTrackLength) : 0;
+  return ((linearProgress - staggerFraction) + 10) % 1;
 }
 
 function getCurrentLap(raceTimeMs) {
@@ -916,7 +1029,7 @@ function renderLoop(timestamp) {
   }
 
   // Update kart positions
-  if (sceneManager.trackPoints3D.length > 0 && posSnapshot.size > 0) {
+  if (sceneManager.trackPoints3D.length > 0 && posSnapshot.size > 0 && !sceneManager.garageMode) {
     const totalDrivers = posSnapshot.size;
     const currentEpoch = state.raceStartTime + state.currentRaceTime;
     const cache = state.locationCache;
@@ -966,17 +1079,19 @@ function renderLoop(timestamp) {
           }
 
           // === PERFECT GRID STAGGER LOGIC ===
-          // Even at the start of a race, GPS coordinates often overlap on the centerline.
-          // We apply a professional 1-2 stagger [Left/Right] perpendicular to the track heading.
-          const gridWeight = Math.max(0, 1 - (state.currentRaceTime / 5000)); // Blends out after 5 seconds
-          if (gridWeight > 0) {
-            const isLeft = (data.position % 2 === 1);
-            const lateralOffset = (isLeft ? -4.5 : 4.5) * gridWeight;
-            
-            // Calculate perpendicular vector: (-cos(A), 0, sin(A)) or similar depending on world orientation
-            // Based on our atan2(tx, -ty), this is the math for the sideways push:
-            world.x += Math.cos(angle) * lateralOffset;
-            world.z -= Math.sin(angle) * lateralOffset;
+          // Blend GPS position toward pre-computed grid slot during start phase
+          const gridWeight = Math.max(0, 1 - (state.currentRaceTime / 5000));
+          if (gridWeight > 0 && state.gridSlots && data.position >= 1 && data.position <= 20) {
+            const slot = state.gridSlots[data.position - 1];
+            const mc = state.matchedCircuit;
+            const isPoleRight = !mc || (mc.poleSide !== 'left');
+            const isRightSlot = (data.position % 2 === 1) ? isPoleRight : !isPoleRight;
+            const rX = Math.cos(slot.angle);
+            const rZ = -Math.sin(slot.angle);
+            const gridX = slot.x + rX * (isRightSlot ? 4.0 : -4.0);
+            const gridZ = slot.z + rZ * (isRightSlot ? 4.0 : -4.0);
+            world.x = world.x * (1 - gridWeight) + gridX * gridWeight;
+            world.z = world.z * (1 - gridWeight) + gridZ * gridWeight;
           }
 
           // Direct speed from spline derivative
@@ -999,13 +1114,31 @@ function renderLoop(timestamp) {
         driverNum, state.currentRaceTime, data.position, totalDrivers
       );
       const pos3D = sceneManager.getPositionOnTrack(progress);
+      
+      // === GRID STAGGER FOR INTERPOLATION PATH ===
+      // Blend interpolation position toward pre-computed grid slot during start phase
+      const gridWeight = Math.max(0, 1 - (state.currentRaceTime / 5000));
+      if (gridWeight > 0 && state.gridSlots && data.position >= 1 && data.position <= 20) {
+        const slot = state.gridSlots[data.position - 1];
+        const mc = state.matchedCircuit;
+        const isPoleRight = !mc || (mc.poleSide !== 'left');
+        const isRightSlot = (data.position % 2 === 1) ? isPoleRight : !isPoleRight;
+        const rX = Math.cos(slot.angle);
+        const rZ = -Math.sin(slot.angle);
+        const gridX = slot.x + rX * (isRightSlot ? 4.0 : -4.0);
+        const gridZ = slot.z + rZ * (isRightSlot ? 4.0 : -4.0);
+        pos3D.x = pos3D.x * (1 - gridWeight) + gridX * gridWeight;
+        pos3D.z = pos3D.z * (1 - gridWeight) + gridZ * gridWeight;
+        pos3D.angle = pos3D.angle * (1 - gridWeight) + slot.angle * gridWeight;
+      }
+
       kart.updatePosition(pos3D.x, pos3D.y, pos3D.z, pos3D.angle);
       kart.progress = progress;
 
       // Speed calc
       const dProgress = Math.abs(progress - (kart._prevProgress || 0));
-      if (dProgress < 0.5 && dtMs > 0) {
-        const dtSec = dtMs / 1000;
+      if (dProgress < 0.5 && smoothedDelta > 0) {
+        const dtSec = (smoothedDelta * state.speed) / 1000;
         const trackLenKm = 5;
         kart.speed = (dProgress * trackLenKm) / (dtSec / 3600);
       }
@@ -1063,15 +1196,15 @@ function renderLoop(timestamp) {
                 const fWeight = Math.max(0, 1.0 - (absF / 15.0));
 
                 // LATERAL SEPARATION:
-                // We want a minimum lateral distance of ~3.8m (Car + clearance)
+                // Dampen collision avoidance during grid phase to let staggered positions settle
+                const gridWeight = Math.max(0, 1 - (state.currentRaceTime / 5000));
                 const idealGap = 3.8;
                 if (absR < idealGap) {
                     const overlap = idealGap - absR;
-                    // Push harder if physically closer, but always push a bit
-                    const push = overlap * 0.4 * fWeight; 
+                    const push = overlap * 0.4 * fWeight * (1.0 - gridWeight * 0.8); 
                     const direction = dotRight > 0 ? 1 : -1;
                     
-                    // Additive force (supports 3-wide)
+                    // Additive force
                     kA.targetLateralOffset -= direction * push;
                     kB.targetLateralOffset += direction * push;
                 }
@@ -1112,7 +1245,7 @@ function renderLoop(timestamp) {
   miniMap.update(state.karts, state.trackedDriver);
 
   // Update UI
-  if (state.raceDuration > 0) {
+  if (state.raceDuration > 0 && !sceneManager.garageMode) {
     const lap = getCurrentLap(state.currentRaceTime);
     state.currentLap = lap;
 

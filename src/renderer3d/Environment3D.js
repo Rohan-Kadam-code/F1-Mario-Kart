@@ -10,6 +10,10 @@ export class Environment3D {
     this.isRaining = false;
     this.isNight = false;
 
+    this.group = new THREE.Group();
+    this.group.name = 'EnvironmentGroup';
+    this.scene.add(this.group);
+
     this._buildSkyDome();
     this._setupFog();
   }
@@ -53,7 +57,7 @@ export class Environment3D {
     });
 
     this.skyDome = new THREE.Mesh(skyGeo, skyMat);
-    this.scene.add(this.skyDome);
+    this.group.add(this.skyDome);
   }
 
   /* ── Fog ── */

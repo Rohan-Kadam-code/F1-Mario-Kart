@@ -1,0 +1,281 @@
+/* Garage Panel Overlay */
+.garage-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1000;
+  display: flex;
+  pointer-events: none; /* Let clicks pass through to 3D canvas where possible */
+}
+
+.garage-overlay.hidden {
+  display: none;
+}
+
+.garage-sidebar {
+  width: 380px;
+  background: rgba(15, 15, 20, 0.85);
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  height: 100%;
+  pointer-events: auto; /* Re-enable for panel */
+  box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+}
+
+.garage-controls {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-group label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #fff;
+  opacity: 0.6;
+  font-weight: 600;
+}
+
+/* UI Elements */
+
+.driver-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.driver-nav button {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.driver-nav button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.current-driver-display {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: bold;
+  font-size: 1.2rem;
+  color: white;
+}
+
+/* Custom Color Picker */
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  width: 100%;
+  height: 48px;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  background: none;
+}
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type="color"]::-webkit-color-swatch {
+  border: 2px solid rgba(255,255,255,0.2);
+  border-radius: 8px;
+}
+
+/* Inputs */
+input[type="text"], input[type="number"] {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+input[type="text"]:focus, input[type="number"]:focus {
+  border-color: #e10600; /* F1 Red */
+}
+
+/* Compound Buttons */
+.compound-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.compound-btn {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.compound-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.compound-btn.selected {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: white;
+  font-weight: 700;
+}
+
+/* Additional button styles */
+.small-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.small-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.close-btn {
+  background: #e10600;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.close-btn:hover {
+  background: #cc0000;
+}
+
+/* Fullscreen Garage Mode Overrides */
+#app.garage-active #header,
+#app.garage-active #driverPanel,
+#app.garage-active #eventPanel,
+#app.garage-active #raceInfoBar,
+#app.garage-active #playbackControls,
+#app.garage-active #miniMap,
+#app.garage-active .zoom-controls,
+#app.garage-active .quality-toggle {
+  display: none !important;
+}
+
+#app.garage-active #mainLayout {
+  grid-template-columns: 1fr;
+  grid-template-areas: "race";
+  height: 100vh;
+  margin: 0;
+}
+
+#app.garage-active #raceSection {
+  padding: 0;
+}
+
+#app.garage-active .canvas-container {
+  height: 100vh;
+  border-radius: 0;
+}
+
+/* Studio Controls Styling */
+.studio-header {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 24px !important;
+  margin-top: 12px;
+}
+
+.studio-controls-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.studio-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.studio-row span {
+  font-size: 0.85rem;
+  color: rgba(255,255,255,0.7);
+  font-weight: 500;
+  min-width: 70px;
+}
+
+/* Custom Range Input */
+input[type="range"] {
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 18px;
+  width: 18px;
+  border-radius: 50%;
+  background: #e10600;
+  margin-top: -6.5px;
+  transition: transform 0.2s;
+  box-shadow: 0 0 12px rgba(225, 6, 0, 0.6);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #e10600;
+  width: 18px;
+  height: 18px;
+}
