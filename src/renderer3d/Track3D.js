@@ -47,6 +47,10 @@ export class Track3D {
     }
 
     if (trackPoints.length < 3) return;
+    
+    // Bridge Elevation is now applied via SceneManager before build()
+    // but we can still store indices for structural building
+    this._detectBridgeIntersection(trackPoints);
 
     // Build components
     this._buildTerrain(trackPoints);
@@ -65,6 +69,9 @@ export class Track3D {
       this._buildPitLane(pitLanePoints);
     }
 
+    // NEW: Bridge & Tunnel Structural details
+    this._buildBridgeStructure(trackPoints);
+
     if (circuitData) {
       this._buildCircuitNameLabel(circuitData);
     }
@@ -79,6 +86,117 @@ export class Track3D {
         if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
         else child.material.dispose();
       }
+    }
+  }
+
+  /* ── Figure-Eight Flyover (Suzuka Bridge Detection) ── */
+  _detectBridgeIntersection(points) {
+    if (points.length < 100) return;
+    let cross1 = -1;
+    for (let i = 0; i < points.length; i += 5) {
+      const p1 = points[i], p2 = points[(i + 10) % points.length];
+      for (let j = i + 50; j < points.length; j += 5) {
+        const p3 = points[j], p4 = points[(j + 10) % points.length];
+        if (this._intersect(p1.x, p1.z, p2.x, p2.z, p3.x, p3.z, p4.x, p4.z)) {
+          cross1 = i; break;
+        }
+      }
+      if (cross1 !== -1) break;
+    }
+    this.bridgeCenter = cross1;
+    this.bridgeRampLen = 120;
+  }
+
+  _intersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const det = (x2 - x1) * (y4 - y3) - (x4 - x3) * (y2 - y1);
+    if (det === 0) return false;
+    const lambda = ((y4 - y3) * (x4 - x1) + (x3 - x4) * (y4 - y1)) / det;
+    const gamma = ((y1 - y2) * (x4 - x1) + (x1 - x2) * (y4 - y1)) / det;
+    return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+  }
+
+  /* ── Bridge & Tunnel Structural Details ── */
+  _buildBridgeStructure(points) {
+    if (!this.bridgeCenter) return;
+
+    const rampLen = this.bridgeRampLen;
+    const bridgePoints = [];
+    const bridgeStart = (this.bridgeCenter - rampLen/3 + points.length) % points.length;
+    const bridgeEnd = (this.bridgeCenter + rampLen/3) % points.length;
+    
+    // Extract strictly the top part of the bridge
+    for (let i = 0; i < points.length; i++) {
+        let dist = Math.abs(i - this.bridgeCenter);
+        if (dist > points.length / 2) dist = points.length - dist;
+        if (dist < rampLen/3) {
+            bridgePoints.push(points[i]);
+        }
+    }
+
+    if (bridgePoints.length < 2) return;
+
+    // 1. Concrete Skirts (Dense walls from bridge deck to ground)
+    const skirtHeight = 12;
+    const bridgeMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 });
+    
+    // Relative drop of 2.5 units (creates a solid deck but leaves the lower track completely clear)
+    const leftSkirt = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.5, 0.1, -2.5);
+    this.group.add(new THREE.Mesh(leftSkirt, bridgeMat));
+    
+    const rightSkirt = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.5), 0.1, -2.5);
+    this.group.add(new THREE.Mesh(rightSkirt, bridgeMat));
+
+    // 2. Giant Side-Banners (Pirelli-style)
+    const bannerCanvas = document.createElement('canvas');
+    bannerCanvas.width = 512; bannerCanvas.height = 128;
+    const bctx = bannerCanvas.getContext('2d');
+    bctx.fillStyle = '#ffcc00'; bctx.fillRect(0,0,512,128);
+    bctx.fillStyle = '#e10600'; bctx.font = 'bold 80px "Inter", sans-serif';
+    bctx.textAlign = 'center'; bctx.textBaseline = 'middle';
+    bctx.fillText('SUZUKA CIRCUIT', 256, 64);
+    
+    const bannerTex = new THREE.CanvasTexture(bannerCanvas);
+    bannerTex.wrapS = THREE.RepeatWrapping;
+    bannerTex.repeat.set(10, 1); // Tile the text along the bridge
+    
+    const bannerMat = new THREE.MeshStandardMaterial({ 
+        map: bannerTex,
+        roughness: 0.4,
+        emissive: 0x221100,
+        emissiveIntensity: 0.5
+    });
+
+    const leftPanel = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.7, 0.4, -4.5);
+    const lpMesh = new THREE.Mesh(leftPanel, bannerMat);
+    this.group.add(lpMesh);
+
+    const rightPanel = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.7), 0.4, -4.5);
+    const rpMesh = new THREE.Mesh(rightPanel, bannerMat);
+    this.group.add(rpMesh);
+
+    // 3. Safety Railings (Triple metal rails)
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.8 });
+    for (let h = 1.0; h <= 2.2; h += 0.6) {
+        const lr = this._buildEdgeStrip(bridgePoints, this.trackWidth/2 + 0.4, this.trackWidth/2 + 0.5, h, false);
+        this.group.add(new THREE.Mesh(lr, railMat));
+        const rr = this._buildEdgeStrip(bridgePoints, -(this.trackWidth/2 + 0.5), -(this.trackWidth/2 + 0.4), h, false);
+        this.group.add(new THREE.Mesh(rr, railMat));
+    }
+
+    // 4. Concrete Bridge Supports (Pillars)
+    const pillarGeo = new THREE.CylinderGeometry(2, 2, 16, 8);
+    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 });
+    
+    // Near the crossover point
+    const bridgeCenterPoint = points[this.bridgeCenter];
+    if (bridgeCenterPoint) {
+        const lp1 = new THREE.Mesh(pillarGeo, pillarMat);
+        lp1.position.set(bridgeCenterPoint.x + this.trackWidth/2 + 2, 0, bridgeCenterPoint.z);
+        this.group.add(lp1);
+        
+        const rp1 = new THREE.Mesh(pillarGeo, pillarMat);
+        rp1.position.set(bridgeCenterPoint.x - (this.trackWidth/2 + 2), 0, bridgeCenterPoint.z);
+        this.group.add(rp1);
     }
   }
 
@@ -116,9 +234,15 @@ export class Track3D {
         // Optimization: Sample track points
         for (let j = 0; j < points.length; j += 2) {
           const pt = points[j];
+          
+          // Bridge Clearance Logic: Do NOT mold the terrain to the bridge.
+          // This ensures the ground stays flat under the flyover, leaving the underpass clear.
+          if (pt.isBridge) continue;
+
           const dx = v.x - pt.x;
           const dz = v.z - pt.z;
           const d2 = dx*dx + dz*dz;
+          
           if (d2 < minDistSq) {
             minDistSq = d2;
             nearestY = pt.y || 0;
@@ -214,10 +338,10 @@ export class Track3D {
     const edgeInner = edgeOuter - lineW;
     const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 });
     
-    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.22);
+    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.21); // Layer 1
     this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
     
-    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.22);
+    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.21); // Layer 1
     this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
@@ -274,15 +398,20 @@ export class Track3D {
 
     const segmentCount = points.length;
     for (let i = 0; i < segmentCount; i += 6) {
-      const segPoints = points.slice(i, i + 8);
-      if (segPoints.length < 2) continue;
+      // Build small overlapping segments for the blue/white pattern
+      const segPoints = [];
+      const dashLen = 8;
+      for (let j = 0; j < dashLen; j++) {
+          segPoints.push(points[(i + j) % points.length]);
+      }
       
       const mat = (Math.floor(i / 12) % 2 === 0) ? borderMatBlue : borderMatWhite;
       
-      const lWall = this._buildEdgeStrip(segPoints, kerbEnd, kerbEnd + 1.2, 0.15, false);
+      // Use the ROBUST geometry helper that handles tangents across segments
+      const lWall = this._buildEdgeStrip(segPoints, kerbEnd, kerbEnd + 1.2, 0.21, false); 
       this.group.add(new THREE.Mesh(lWall, mat));
       
-      const rWall = this._buildEdgeStrip(segPoints, -kerbEnd - 1.2, -kerbEnd, 0.15, false);
+      const rWall = this._buildEdgeStrip(segPoints, -kerbEnd - 1.2, -kerbEnd, 0.21, false);
       this.group.add(new THREE.Mesh(rWall, mat));
     }
   }
@@ -454,27 +583,35 @@ export class Track3D {
 
   /* ── Center dashed line ── */
   _buildCenterLine(points) {
-    const dashLength = 3;
-    const gapLength = 6;
-    const positions = [];
+    const dashMod = 20; // Every 20 points
+    const dashLength = 8; // Dash is 8 points long
 
-    for (let i = 0; i < points.length; i += 2) {
-      const p = points[i];
-      if (Math.floor(i / 10) % 2 === 0) {
-        positions.push(p.x, p.y + 0.22, p.z);
-      }
-    }
-
-    if (positions.length > 3) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      const mat = new THREE.LineBasicMaterial({
+    const mat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: 0.25,
-      });
-      const centerLine = new THREE.Line(geo, mat);
-      this.group.add(centerLine);
+        opacity: 0.9,
+        roughness: 0.3,
+        metalness: 0.1,
+        emissive: 0x444444, // Slight glow for extreme visibility
+        side: THREE.DoubleSide,
+        depthWrite: false, // Prevents self-clipping with the underlying track
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+    });
+
+    for (let i = 0; i < points.length - dashMod; i += dashMod) {
+        const segPoints = points.slice(i, i + dashLength + 1);
+        if (segPoints.length < 2) continue;
+        
+        // Extrude a narrow strip (0.6m wide)
+        const { geometry } = this._extrudeTrackStrip(segPoints, 0.6, { 
+            yOffset: 0.23, // Layer 3
+            closeLoop: false 
+        });
+        
+        const dash = new THREE.Mesh(geometry, mat);
+        this.group.add(dash);
     }
   }
 
@@ -497,7 +634,7 @@ export class Track3D {
     const rows = 3;
 
     const checkerGroup = new THREE.Group();
-    checkerGroup.position.set(p0.x, p0.y + 0.12, p0.z);
+    checkerGroup.position.set(p0.x, p0.y + 0.25, p0.z); // Layer 5
     checkerGroup.rotation.y = angle;
     checkerGroup.rotation.x = -pitch;
 
@@ -642,8 +779,8 @@ export class Track3D {
       if (drsPoints.length < 2) continue;
 
       const { geometry: drsGeo } = this._extrudeTrackStrip(drsPoints, this.trackWidth - 0.5, {
-        yOffset: 0.22,
-        closeLoop: false // CRITICAL: DRS is an open segment
+        yOffset: 0.22, // Layer 2
+        closeLoop: false 
       });
 
       const drsMat = new THREE.MeshStandardMaterial({
@@ -652,7 +789,10 @@ export class Track3D {
         opacity: 0.25,
         emissive: 0x00ffff,
         emissiveIntensity: 0.6,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
       });
 
       this.group.add(new THREE.Mesh(drsGeo, drsMat));
@@ -670,10 +810,17 @@ export class Track3D {
 
       // Glowing Ground Strip
       const { geometry: stripGeo } = this._extrudeTrackStrip([points[idx], points[(idx+1)%points.length]], this.trackWidth, { 
-        yOffset: 0.23,
+        yOffset: 0.24, // Layer 4
         closeLoop: false // CRITICAL: Sector line is an open segment
       });
-      const stripMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.0 });
+      const stripMat = new THREE.MeshStandardMaterial({ 
+          color, 
+          emissive: color, 
+          emissiveIntensity: 1.0,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
+      });
       this.group.add(new THREE.Mesh(stripGeo, stripMat));
 
       // Japan Paper Lanterns on sides
@@ -893,7 +1040,7 @@ export class Track3D {
   
         vertices.push(
           p.x + nx * offset, (p.y || 0) + topYOffset, p.z + nz * offset,
-          p.x + nx * offset, bottomYOffset, p.z + nz * offset
+          p.x + nx * offset, (p.y || 0) + bottomYOffset, p.z + nz * offset
         );
   
         if (i < points.length - 1) {

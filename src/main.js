@@ -1063,7 +1063,11 @@ function renderLoop(timestamp) {
       if (useRealPos) {
         const realPos = cache.getDriverPosition(driverNum, currentEpoch);
         if (realPos) {
-          let world = sceneManager.toWorldCoords(realPos.x, realPos.y);
+          // Calculate expected chronological progress to constrain spatial search
+          const progress = getDriverTrackProgress(driverNum, state.currentRaceTime, data.position, totalDrivers);
+          
+          // Pass the kart's expected progress so the nearest-neighbor search doesn't mistakenly jump to a bridge/underpass
+          let world = sceneManager.toWorldCoords(realPos.x, realPos.y, kart._currentPos.y, progress);
           
           // Stable orientation from dual-sampling tangent (Current + Look-ahead)
           const tangentCurrent = cache.getDriverTangent(driverNum, currentEpoch);
@@ -1098,11 +1102,7 @@ function renderLoop(timestamp) {
           const s = cache.getDriverSpeed(driverNum, currentEpoch);
           kart.speed = (kart.speed * 0.8) + (s * 0.2); // Light smoothing
 
-          // Fallback to interpolation progress to get the correct Y and Pitch for this part of the track
-          const progress = getDriverTrackProgress(driverNum, state.currentRaceTime, data.position, totalDrivers);
-          const pos3D = sceneManager.getPositionOnTrack(progress);
-
-          kart.updatePosition(world.x, pos3D.y, world.z, angle, pos3D.pitch);
+          kart.updatePosition(world.x, world.y, world.z, angle, world.pitch);
           kart.progress = 0;
 
           // Star sparkle

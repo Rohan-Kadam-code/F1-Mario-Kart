@@ -531,10 +531,13 @@ export class SceneManager {
       }
       return {
         x: (p.x - cx) * scale,
-        y: elevatedY,  // computed elevation
-        z: -(p.y - cy) * scale, // flip Y → Z (Y-up in 3D, Y was screen-up in 2D)
+        y: elevatedY,
+        z: -(p.y - cy) * scale,
       };
     });
+
+    // Apply Functional Bridge Elevation for Suzuka Figure-Eight
+    this._applySuzukaBridgeElevation(this.trackPoints3D);
 
     this.pitLanePoints3D = pitLanePoints.map((p, i) => {
       // Very naive pit lane elevation matching start/finish for now
@@ -613,17 +616,138 @@ export class SceneManager {
     return 0;
   }
 
+  _applySuzukaBridgeElevation(points) {
+    if (points.length < 100) return;
+    let crossIdx = -1;
+    for (let i = 0; i < points.length; i += 5) {
+      const p1 = points[i], p2 = points[(i + 10) % points.length];
+      for (let j = i + 50; j < points.length; j += 5) {
+        const p3 = points[j], p4 = points[(j + 10) % points.length];
+        
+        // Line-segment intersection test
+        const x1=p1.x, y1=p1.z, x2=p2.x, y2=p2.z, x3=p3.x, y3=p3.z, x4=p4.x, y4=p4.z;
+        const det = (x2-x1)*(y4-y3)-(x4-x3)*(y2-y1);
+        if (det !== 0) {
+          const l = ((y4-y3)*(x4-x1)+(x3-x4)*(y4-y1))/det;
+          const g = ((y1-y2)*(x4-x1)+(x1-x2)*(y4-y1))/det;
+          if (l>0 && l<1 && g>0 && g<1) {
+            crossIdx = i; break;
+          }
+        }
+      }
+      if (crossIdx !== -1) break;
+    }
+
+    if (crossIdx === -1) return;
+
+    const rampLen = 120;
+    const bridgeHeight = 15;
+    for (let i = 0; i < points.length; i++) {
+        let dist = Math.abs(i - crossIdx);
+        if (dist > points.length / 2) dist = points.length - dist;
+        if (dist < rampLen) {
+            const t = 1.0 - (dist / rampLen);
+            const smoothT = t * t * (3 - 2 * t);
+            points[i].y += (bridgeHeight * smoothT);
+            points[i].isBridge = true;
+        } else {
+            points[i].isBridge = false;
+        }
+    }
+  }
+
   /**
    * Convert raw track coordinate {x, y} to 3D world position.
    * Used by main.js to position karts from LocationCache data.
    */
-  toWorldCoords(x, y) {
-    if (!this._trackScale) return { x: 0, y: 0, z: 0 };
-    return {
-      x: (x - this._trackCenterX) * this._trackScale,
-      y: 0,
-      z: -(y - this._trackCenterY) * this._trackScale,
-    };
+  toWorldCoords(rawX, rawY, currentY = undefined, expectedProgress = undefined) {
+    if (!this._trackScale) return { x: 0, y: 0, z: 0, pitch: 0 };
+    const wx = (rawX - this._trackCenterX) * this._trackScale;
+    const wz = -(rawY - this._trackCenterY) * this._trackScale;
+    
+    // Dynamically find elevation and pitch for karts at this (X, Z)
+    let groundY = 0;
+    let pitch = 0;
+
+    if (this.trackPoints3D && this.trackPoints3D.length > 2) {
+      const totalPoints = this.trackPoints3D.length;
+      let minDistSq = Infinity;
+      let nearestIdx = -1;
+
+      // Chronological search constraint: If we know roughly where the car is in the lap (progress 0..1),
+      // we heavily restrict the spatial search window to +/- 10% of the lap around that progress point.
+      // This mathematically completely eliminates overlapping track ambiguity (bridges/intersections).
+      let searchStart = 0;
+      let searchEnd = totalPoints;
+      
+      if (expectedProgress !== undefined) {
+         const expectedIdx = Math.round(expectedProgress * totalPoints);
+         const searchWindow = Math.max(100, Math.round(totalPoints * 0.1)); // 10% map tolerance
+         searchStart = expectedIdx - searchWindow;
+         searchEnd = expectedIdx + searchWindow;
+      }
+
+      // Optimised search: check points for nearest track node
+      // Use i += 2 for higher resolution near inclines
+      for (let i = searchStart; i <= searchEnd; i += 2) {
+        // Wrap gracefully, since the topological F1 track is a loop
+        const safeIdx = (i + totalPoints * 10) % totalPoints; 
+        const pt = this.trackPoints3D[safeIdx];
+        
+        let d2 = (wx - pt.x)**2 + (wz - pt.z)**2;
+        // True 3D Euclidean Search with strong vertical bias.
+        // If we know the kart's current height, we penalize nodes on different vertical layers
+        // (like the underpass beneath the ramp) to completely eliminate ambiguous snapping.
+        if (currentY !== undefined) {
+           const dy = pt.y - currentY;
+           d2 += (dy * dy) * 5.0; // Heavy Y-axis weight forces vertical continuity
+        }
+
+        if (d2 < minDistSq) {
+          minDistSq = d2;
+          nearestIdx = safeIdx;
+        }
+      }
+
+      if (nearestIdx !== -1) {
+        let p1 = this.trackPoints3D[nearestIdx];
+        const prev = this.trackPoints3D[(nearestIdx - 1 + this.trackPoints3D.length) % this.trackPoints3D.length];
+        const next = this.trackPoints3D[(nearestIdx + 1) % this.trackPoints3D.length];
+        
+        // Find if the car is "ahead" or "behind" p1 to pick the correct segment
+        let p2 = next;
+        const v1x = next.x - p1.x; const v1z = next.z - p1.z;
+        const kx = wx - p1.x; const kz = wz - p1.z;
+        const dotNext = kx * v1x + kz * v1z;
+        
+        if (dotNext < 0) {
+            p2 = p1;
+            p1 = prev;
+        }
+
+        // Project kart exact position onto the line segment to find precise percentage 't'
+        const dx = p2.x - p1.x;
+        const dz = p2.z - p1.z;
+        const lenSq = dx*dx + dz*dz;
+        let t = 0;
+        if (lenSq > 0.001) {
+             t = ((wx - p1.x)*dx + (wz - p1.z)*dz) / lenSq;
+             t = Math.max(0, Math.min(1, t)); // clamp
+        }
+        
+        // Perfect smooth sliding elevation (zero jumps)
+        groundY = p1.y + (p2.y - p1.y) * t;
+
+        // Perfect Segment Pitch
+        const dxz = Math.sqrt(lenSq);
+        const dy = p2.y - p1.y;
+        if (dxz > 0.1) {
+          pitch = Math.atan2(dy, dxz);
+        }
+      }
+    }
+
+    return { x: wx, y: groundY, z: wz, pitch: pitch };
   }
 
   /**

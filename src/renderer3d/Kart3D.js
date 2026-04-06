@@ -573,7 +573,22 @@ export class Kart3D {
 
     if (this.inGarage) return; // Skip position Smoothing in Garage
 
-    this._currentPos.lerp(this._targetPos, this._lerpFactor);
+    // ── Suspension Physics (Isolated Vertical Dampening) ──
+    // Horizontal tracking (snappy to follow telemetry accurately)
+    this._currentPos.x += (this._targetPos.x - this._currentPos.x) * this._lerpFactor;
+    this._currentPos.z += (this._targetPos.z - this._currentPos.z) * this._lerpFactor;
+
+    // Vertical tracking (highly dampened to represent mass and prevent jump glitches)
+    let dy = this._targetPos.y - this._currentPos.y;
+
+    // Mathematical Jump Prevention: clamp maximum vertical velocity to 0.4 units per frame (~24m/s incline)
+    // Ensures karts track hills perfectly but mathematically CANNOT "pop" up and down.
+    if (Math.abs(dy) > 0.4) {
+      dy = Math.sign(dy) * 0.4;
+    }
+    
+    // Y applies its own smooth suspension lerp instead of snapping
+    this._currentPos.y += dy * (this._lerpFactor * 0.8);
 
     // ── Apply Lateral Offset (Side-by-Side Lane Logic) ──
     // Smoothly shift target towards desired lane
