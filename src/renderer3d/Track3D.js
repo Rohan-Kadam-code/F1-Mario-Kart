@@ -25,8 +25,10 @@ export class Track3D {
    * @param {Array<{x,y,z}>} trackPoints — centerline in world space
    * @param {Array<{x,y,z}>} pitLanePoints — pit lane centerline
    * @param {Object|null} circuitData — from circuitData.js
+   * @param {Object|null} transform — { scale, cx, cy }
    */
-  build(trackPoints, pitLanePoints = [], circuitData = null) {
+  build(trackPoints, pitLanePoints = [], circuitData = null, transform = null) {
+    this.transform = transform;
     // Clear previous
     this._clearGroup();
 
@@ -53,27 +55,28 @@ export class Track3D {
     this._detectBridgeIntersection(trackPoints);
 
     // Build components
-    this._buildTerrain(trackPoints);
+    this._buildTerrain(trackPoints, pitLanePoints);
     this._buildRoadSurface(trackPoints);
     this._buildKerbs(trackPoints);
     this._buildRunoff(trackPoints);
     this._buildFinishLine(trackPoints);
-    this._buildTrees(trackPoints);
+    this._buildTrees(trackPoints, pitLanePoints);
     this._buildJapanProps(trackPoints);
     this._buildQuestionBlocks(trackPoints);
     this._buildCenterLine(trackPoints);
     this._buildDRSZones(trackPoints);
-    this._buildSectorMarkers(trackPoints);
+    this._buildSectionMarkers(trackPoints);
+    this._buildBridgeStructure(trackPoints);
 
     if (pitLanePoints.length > 2) {
       this._buildPitLane(pitLanePoints);
     }
 
-    // NEW: Bridge & Tunnel Structural details
-    this._buildBridgeStructure(trackPoints);
 
     if (circuitData) {
       this._buildCircuitNameLabel(circuitData);
+      this._buildEnvironment(trackPoints);
+      this._buildLandmarks(trackPoints);
     }
   }
 
@@ -89,61 +92,42 @@ export class Track3D {
     }
   }
 
-  /* ── Figure-Eight Flyover (Suzuka Bridge Detection) ── */
+  /* ── Figure-Eight Flyover (Suzuka Bridge) ── */
   _detectBridgeIntersection(points) {
-    if (points.length < 100) return;
-    let cross1 = -1;
-    for (let i = 0; i < points.length; i += 5) {
-      const p1 = points[i], p2 = points[(i + 10) % points.length];
-      for (let j = i + 50; j < points.length; j += 5) {
-        const p3 = points[j], p4 = points[(j + 10) % points.length];
-        if (this._intersect(p1.x, p1.z, p2.x, p2.z, p3.x, p3.z, p4.x, p4.z)) {
-          cross1 = i; break;
+    if (this.circuitData && this.circuitData.bridge) {
+      // Bridge explicitly defined in data, we don't need detection for rendering structs
+      // However, we mark the overIdx points as bridges so the terrain builder knows to clear the deck
+      const range = this.circuitData.bridge.overIdxRange;
+      if (range) {
+        for (let i = range[0]; i <= range[1]; i++) {
+          if (points[i]) points[i].isBridge = true;
         }
       }
-      if (cross1 !== -1) break;
     }
-    this.bridgeCenter = cross1;
-    this.bridgeRampLen = 120;
-  }
-
-  _intersect(x1, y1, x2, y2, x3, y3, x4, y4) {
-    const det = (x2 - x1) * (y4 - y3) - (x4 - x3) * (y2 - y1);
-    if (det === 0) return false;
-    const lambda = ((y4 - y3) * (x4 - x1) + (x3 - x4) * (y4 - y1)) / det;
-    const gamma = ((y1 - y2) * (x4 - x1) + (x1 - x2) * (y4 - y1)) / det;
-    return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
   }
 
   /* ── Bridge & Tunnel Structural Details ── */
   _buildBridgeStructure(points) {
-    if (!this.bridgeCenter) return;
+    if (!this.circuitData || !this.circuitData.bridge || !this.circuitData.bridge.overIdxRange) return;
 
-    const rampLen = this.bridgeRampLen;
+    const range = this.circuitData.bridge.overIdxRange;
     const bridgePoints = [];
-    const bridgeStart = (this.bridgeCenter - rampLen/3 + points.length) % points.length;
-    const bridgeEnd = (this.bridgeCenter + rampLen/3) % points.length;
     
     // Extract strictly the top part of the bridge
-    for (let i = 0; i < points.length; i++) {
-        let dist = Math.abs(i - this.bridgeCenter);
-        if (dist > points.length / 2) dist = points.length - dist;
-        if (dist < rampLen/3) {
-            bridgePoints.push(points[i]);
-        }
+    for (let i = range[0]; i <= range[1]; i++) {
+        if (points[i]) bridgePoints.push(points[i]);
     }
 
     if (bridgePoints.length < 2) return;
 
     // 1. Concrete Skirts (Dense walls from bridge deck to ground)
-    const skirtHeight = 12;
     const bridgeMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 });
     
     // Relative drop of 2.5 units (creates a solid deck but leaves the lower track completely clear)
-    const leftSkirt = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.5, 0.1, -2.5);
+    const leftSkirt = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.5, 0.1, -2.5, false);
     this.group.add(new THREE.Mesh(leftSkirt, bridgeMat));
     
-    const rightSkirt = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.5), 0.1, -2.5);
+    const rightSkirt = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.5), 0.1, -2.5, false);
     this.group.add(new THREE.Mesh(rightSkirt, bridgeMat));
 
     // 2. Giant Side-Banners (Pirelli-style)
@@ -166,11 +150,11 @@ export class Track3D {
         emissiveIntensity: 0.5
     });
 
-    const leftPanel = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.7, 0.4, -4.5);
+    const leftPanel = this._buildVerticalSkirt(bridgePoints, this.trackWidth/2 + 0.7, 0.4, -4.5, false);
     const lpMesh = new THREE.Mesh(leftPanel, bannerMat);
     this.group.add(lpMesh);
 
-    const rightPanel = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.7), 0.4, -4.5);
+    const rightPanel = this._buildVerticalSkirt(bridgePoints, -(this.trackWidth/2 + 0.7), 0.4, -4.5, false);
     const rpMesh = new THREE.Mesh(rightPanel, bannerMat);
     this.group.add(rpMesh);
 
@@ -184,29 +168,107 @@ export class Track3D {
     }
 
     // 4. Concrete Bridge Supports (Pillars)
-    const pillarGeo = new THREE.CylinderGeometry(2, 2, 16, 8);
-    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 });
-    
-    // Near the crossover point
-    const bridgeCenterPoint = points[this.bridgeCenter];
-    if (bridgeCenterPoint) {
-        const lp1 = new THREE.Mesh(pillarGeo, pillarMat);
-        lp1.position.set(bridgeCenterPoint.x + this.trackWidth/2 + 2, 0, bridgeCenterPoint.z);
-        this.group.add(lp1);
-        
-        const rp1 = new THREE.Mesh(pillarGeo, pillarMat);
-        rp1.position.set(bridgeCenterPoint.x - (this.trackWidth/2 + 2), 0, bridgeCenterPoint.z);
-        this.group.add(rp1);
+    // Find the exact crossover point by finding the closest point in overIdx to underIdx
+    const underRange = this.circuitData.bridge.underIdxRange;
+    if (underRange) {
+        let minD2 = Infinity;
+        let bridgeCenterPoint = null;
+        let underpassY = 0;
+        let fwdIdx = 0;
+        let bwdIdx = 0;
+
+        for (let i = range[0]; i <= range[1]; i++) {
+            const overPt = points[i];
+            if (!overPt) continue;
+            for (let j = underRange[0]; j <= underRange[1]; j++) {
+                const underPt = points[j];
+                if (!underPt) continue;
+                const dist2 = (overPt.x - underPt.x)**2 + (overPt.z - underPt.z)**2;
+                if (dist2 < minD2) {
+                    minD2 = dist2;
+                    bridgeCenterPoint = overPt;
+                    underpassY = underPt.y;
+                    fwdIdx = Math.min(i + 1, points.length - 1);
+                    bwdIdx = Math.max(i - 1, 0);
+                }
+            }
+        }
+
+        if (bridgeCenterPoint) {
+            // Find track perpendicular direction
+            const dx = points[fwdIdx].x - points[bwdIdx].x;
+            const dz = points[fwdIdx].z - points[bwdIdx].z;
+            const len = Math.sqrt(dx * dx + dz * dz) || 1;
+            const nx = -dz / len;
+            const nz = dx / len;
+
+            // Height drops from bridge deck to underpass level
+            const pillarHeight = bridgeCenterPoint.y - underpassY;
+            if (pillarHeight > 0) {
+                const pillarGeo = new THREE.CylinderGeometry(2, 2, pillarHeight, 8);
+                const pillarMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 });
+                
+                // Y is centered in cylinder, so midpoint is underpassY + height / 2
+                const midY = underpassY + pillarHeight / 2;
+
+                const lp1 = new THREE.Mesh(pillarGeo, pillarMat);
+                lp1.position.set(bridgeCenterPoint.x + nx * (this.trackWidth/2 + 0.5), midY, bridgeCenterPoint.z + nz * (this.trackWidth/2 + 0.5));
+                this.group.add(lp1);
+                
+                const rp1 = new THREE.Mesh(pillarGeo, pillarMat);
+                rp1.position.set(bridgeCenterPoint.x - nx * (this.trackWidth/2 + 0.5), midY, bridgeCenterPoint.z - nz * (this.trackWidth/2 + 0.5));
+                this.group.add(rp1);
+            }
+        }
     }
   }
 
   /* ── Procedural Terrain (Molded Grass) ── */
-  _buildTerrain(points) {
-    if (!points || points.length === 0) return;
+  _buildTerrain(trackPoints, pitLanePoints = []) {
+    // 1. Create a DENSE set of points for the sampler.
+    // If we only use raw points, a vertex might 'fall through the cracks' in long straights.
+    const allPoints = [];
+    const rawLists = [trackPoints, pitLanePoints];
+    
+    for (const list of rawLists) {
+      if (!list || list.length < 2) {
+          if (list && list.length === 1) allPoints.push(list[0]);
+          continue;
+      }
+      for (let i = 0; i < list.length; i++) {
+        const p1 = list[i];
+        allPoints.push(p1);
+        
+        // Line segment interpolation: 
+        // If the gap to the next point is > 5m, add intermediate sampling dots
+        const next = list[(i + 1) % list.length];
+        if (i === list.length - 1 && list === pitLanePoints) continue; // Don't loop pit lane
+        
+        const dx = next.x - p1.x;
+        const dy = next.y - p1.y;
+        const dz = next.z - p1.z;
+        const dist = Math.sqrt(dx*dx + dz*dz);
+        
+        if (dist > 5) {
+          const steps = Math.floor(dist / 5);
+          for (let s = 1; s < steps; s++) {
+            const t = s / steps;
+            allPoints.push({
+              x: p1.x + dx * t,
+              y: p1.y + dy * t,
+              z: p1.z + dz * t,
+              isBridge: p1.isBridge || next.isBridge
+            });
+          }
+        }
+      }
+    }
+
+    if (allPoints.length === 0) return;
 
     // Use a high-density plane for the heightmap
     const size = 6000;
-    const segs = 120; // 120x120 segments (14,400 vertices)
+    const segs = 400; // 400x400 segments (160,000 vertices) for high-fidelity molding
     const geo = new THREE.PlaneGeometry(size, size, segs, segs);
     geo.rotateX(-Math.PI / 2);
 
@@ -214,60 +276,73 @@ export class Track3D {
     const v = new THREE.Vector3();
     const trackP = new THREE.Vector3();
 
-    // Pre-calculate track bounding box for performance optimization
+    // 2. Pre-calculate track bounding box with safe margin
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const p of points) {
+    for (const p of allPoints) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
     }
+    const margin = 150; // Increased margin for extreme circuit bounds
+    minX -= margin; maxX += margin; minZ -= margin; maxZ += margin;
 
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i);
       
-      // Find nearest point on track to determine Y height
+      // 3. Find nearest track point to determine Y height
       let minDistSq = Infinity;
-      let nearestY = 0;
+      let nearestY = null;
 
-      // Only check points if within a reasonable distance of the track bounds
-      const margin = 200;
-      if (v.x > minX - margin && v.x < maxX + margin && v.z > minZ - margin && v.z < maxZ + margin) {
-        // Optimization: Sample track points
-        for (let j = 0; j < points.length; j += 2) {
-          const pt = points[j];
-          
-          // Bridge Clearance Logic: Do NOT mold the terrain to the bridge.
-          // This ensures the ground stays flat under the flyover, leaving the underpass clear.
+      // Only check points if within the track bounding box
+      if (v.x > minX && v.x < maxX && v.z > minZ && v.z < maxZ) {
+        // VALLEY PRINCIPLE: Within a generous radius (e.g. 100m), the LOWEST elevation wins.
+        // This prevents 'green walls' or ridges from forming between parallel/overlapping tracks.
+        for (let j = 0; j < allPoints.length; j += 4) { 
+          const pt = allPoints[j];
           if (pt.isBridge) continue;
 
           const dx = v.x - pt.x;
           const dz = v.z - pt.z;
           const d2 = dx*dx + dz*dz;
           
-          if (d2 < minDistSq) {
-            minDistSq = d2;
-            nearestY = pt.y || 0;
+          if (d2 < 10000) { // 100m 'Valley' Radius
+              if (nearestY === null || pt.y < nearestY) {
+                  nearestY = pt.y || 0;
+              }
+              // Still track actual minDist for the 'clearing' logic
+              if (d2 < minDistSq) minDistSq = d2;
+          } else if (d2 < minDistSq) {
+              minDistSq = d2;
+              if (nearestY === null) nearestY = pt.y || 0;
           }
         }
       }
 
-      const dist = Math.sqrt(minDistSq);
-      const trackRadius = 40; // Area around track that matches track height
-      const falloff = 150;    // Smooth transition to ground level
+      if (nearestY === null) nearestY = 0;
 
+      const dist = Math.sqrt(minDistSq);
+      const trackRadius = 40.0; // Prompt Logic: 40m radius terrain depression for underpass
+      const falloff = 100;      // Smoother transition to far hills
+      
+      const isBridgeNearby = minDistSq < 6400; // Within 80m of bridge
+      
       if (dist < trackRadius) {
-        v.y = nearestY - 0.5; // Slightly below track to avoid Z-fighting
+        v.y = nearestY - 3.0; // 3.0m ground duck (combined with 3.0m track lift = 6.0m gap)
       } else if (dist < trackRadius + falloff) {
         const t = 1.0 - (dist - trackRadius) / falloff;
-        // Smoothstep interpolation for natural hills
         const smoothT = t * t * (3 - 2 * t);
         
-        // Add random terrain jitter for "detailed" organic look
-        const jitter = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * 5 * (1.0 - smoothT);
-        v.y = (nearestY - 0.5) * smoothT + jitter;
+        const jitterIntensity = isBridgeNearby ? 0.2 : 4.0;
+        const jitter = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * jitterIntensity * (1.0 - smoothT);
+        v.y = (nearestY - 3.0) * smoothT + jitter;
       } else {
-        // Base ground level with larger rolling noise
-        v.y = -10 + (Math.sin(v.x * 0.02) * Math.sin(v.z * 0.02)) * 15;
+        // Base ground level with rolling noise
+        v.y = -10 + (Math.sin(v.x * 0.02) * Math.sin(v.z * 0.02)) * 12;
       }
+      
+      // Prompt Logic: Far-field grass hills MUST be CAPPED at trackY - 4m
+      // This prevents hilly noise from poking through the asphalt.
+      const capY = nearestY - 4.0;
+      if (v.y > capY) v.y = capY;
 
       pos.setXYZ(i, v.x, v.y, v.z);
     }
@@ -278,7 +353,10 @@ export class Track3D {
       color: 0x5ddb3e,   // Vibrant Mario Kart green
       roughness: 0.7,
       metalness: 0.0,
-      flatShading: false
+      flatShading: false,
+      polygonOffset: true,
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: 2
     });
     
     const mesh = new THREE.Mesh(geo, mat);
@@ -325,7 +403,7 @@ export class Track3D {
     });
     
     const { geometry } = this._extrudeTrackStrip(points, this.trackWidth, {
-      yOffset: 0.2
+      yOffset: 3.0 // Prompt Logic: Track lift (+3m)
     });
     
     const mesh = new THREE.Mesh(geometry, material);
@@ -338,90 +416,110 @@ export class Track3D {
     const edgeInner = edgeOuter - lineW;
     const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 });
     
-    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 0.21); // Layer 1
+    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 3.01); 
     this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
     
-    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 0.21); // Layer 1
+    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 3.01); 
     this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
-  /* ── 3D Stepped Kerbs (Discrete 3D Blocks) ── */
+  /* ── 1.5m Wide Ribbon Kerbs (Prompt Logic) ── */
   _buildKerbs(points) {
-    const kerbWidth = 3.5;
+    const kerbWidth = 1.5; 
     const innerW = this.trackWidth / 2;
-    const blockHeight = 0.8; 
-    const blockLength = 3.0; // Distance along track
-
-    // Materials
-    const matRed = new THREE.MeshStandardMaterial({ color: 0xff1a1a, roughness: 0.4 });
-    const matWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+    const outerW = innerW + kerbWidth;
     
-    const blockGeo = new THREE.BoxGeometry(kerbWidth, blockHeight, blockLength);
+    // Use ribbon geometry for high-fidelity striped kerbs
+    const kerbMat = new THREE.MeshStandardMaterial({
+        roughness: 0.8,
+        metalness: 0.1,
+        vertexColors: true
+    });
 
-    for (let i = 0; i < points.length; i += 2) {
-      const p = points[i];
-      const pNext = points[(i + 1) % points.length];
-      const dx = pNext.x - p.x;
-      const dz = pNext.z - p.z;
-      const angle = Math.atan2(dx, dz);
-      
-      const mat = (Math.floor(i / 1.5) % 2 === 0) ? matRed : matWhite;
+    const vertices = [];
+    const colors = [];
+    const indices = [];
 
-      // Left Side Blocks
-      const lBlock = new THREE.Mesh(blockGeo, mat);
-      const lx = p.x + Math.cos(angle) * (innerW + kerbWidth/2);
-      const lz = p.z - Math.sin(angle) * (innerW + kerbWidth/2);
-      lBlock.position.set(lx, (p.y||0) + blockHeight/2, lz);
-      lBlock.rotation.y = angle;
-      lBlock.castShadow = true;
-      this.group.add(lBlock);
+    const colorRed = new THREE.Color(0xff1a1a);
+    const colorWhite = new THREE.Color(0xffffff);
 
-      // Right Side Blocks
-      const rBlock = new THREE.Mesh(blockGeo, mat.clone());
-      const rx = p.x - Math.cos(angle) * (innerW + kerbWidth/2);
-      const rz = p.z + Math.sin(angle) * (innerW + kerbWidth/2);
-      rBlock.position.set(rx, (p.y||0) + blockHeight/2, rz);
-      rBlock.rotation.y = angle;
-      rBlock.castShadow = true;
-      this.group.add(rBlock);
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const pNext = points[(i+1)%points.length];
+        const pPrev = points[(i-1+points.length)%points.length];
+        
+        const tx = pNext.x - pPrev.x;
+        const tz = pNext.z - pPrev.z;
+        const len = Math.sqrt(tx*tx + tz*tz) || 1;
+        const nx = -tz / len;
+        const nz = tx / len;
+
+        // Stripe color
+        const color = (Math.floor(i / 3) % 2 === 0) ? colorRed : colorWhite;
+
+        // Left Kerb
+        const l_idx = vertices.length / 3;
+        vertices.push(p.x + nx * innerW, (p.y||0) + 3.02, p.z + nz * innerW);
+        vertices.push(p.x + nx * outerW, (p.y||0) + 3.02, p.z + nz * outerW);
+        colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+
+        // Right Kerb
+        const r_idx = vertices.length / 3;
+        vertices.push(p.x - nx * outerW, (p.y||0) + 3.02, p.z - nz * outerW);
+        vertices.push(p.x - nx * innerW, (p.y||0) + 3.02, p.z - nz * innerW);
+        colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+
+        // Correct Indexing: Segment N connects to Segment N+1
+        // Each loop pushes 4 vertices: L-Inner, L-Outer, R-Outer, R-Inner
+        if (i < points.length - 1) {
+            const next_l = l_idx + 4;
+            const next_r = r_idx + 4;
+
+            // Left side ribbon (indices: inner, outer, next_inner, next_outer)
+            indices.push(l_idx, l_idx+1, next_l);
+            indices.push(l_idx+1, next_l+1, next_l);
+
+            // Right side ribbon
+            indices.push(r_idx, r_idx+1, next_r);
+            indices.push(r_idx+1, next_r+1, next_r);
+        }
     }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geo.setIndex(indices);
+    this.group.add(new THREE.Mesh(geo, kerbMat));
   }
 
-  /* ── Runoff Area (Cleaned) ── */
+  /* ── 15m Wide Runoff Area (Prompt Logic) ── */
   _buildRunoff(points) {
-    const kerbEnd = this.trackWidth / 2 + 3.5; // Offset to sit outside stepped kerbs
+    const runoffWidth = 15.0;
+    const innerW = this.trackWidth / 2 + 1.5; // Outside ribbon kerbs
+    const outerW = innerW + runoffWidth;
+    
+    // Prompt Logic: Run-off sits slightly below track (Y-0.15)
+    const runoffY = 2.85; // 3.0 - 0.15 = 2.85
 
-    // Border Walls (High-contrast Blue/White)
-    const wallHeight = 1.4;
-    const borderMatBlue = new THREE.MeshStandardMaterial({ color: 0x0066ee, roughness: 0.2 });
-    const borderMatWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+    const mat = new THREE.MeshStandardMaterial({ 
+        color: 0x44444a, 
+        roughness: 0.9,
+        side: THREE.DoubleSide
+    });
 
-    const segmentCount = points.length;
-    for (let i = 0; i < segmentCount; i += 6) {
-      // Build small overlapping segments for the blue/white pattern
-      const segPoints = [];
-      const dashLen = 8;
-      for (let j = 0; j < dashLen; j++) {
-          segPoints.push(points[(i + j) % points.length]);
-      }
-      
-      const mat = (Math.floor(i / 12) % 2 === 0) ? borderMatBlue : borderMatWhite;
-      
-      // Use the ROBUST geometry helper that handles tangents across segments
-      const lWall = this._buildEdgeStrip(segPoints, kerbEnd, kerbEnd + 1.2, 0.21, false); 
-      this.group.add(new THREE.Mesh(lWall, mat));
-      
-      const rWall = this._buildEdgeStrip(segPoints, -kerbEnd - 1.2, -kerbEnd, 0.21, false);
-      this.group.add(new THREE.Mesh(rWall, mat));
-    }
+    const lGeo = this._buildEdgeStrip(points, innerW, outerW, runoffY, false);
+    this.group.add(new THREE.Mesh(lGeo, mat));
+
+    const rGeo = this._buildEdgeStrip(points, -outerW, -innerW, runoffY, false);
+    this.group.add(new THREE.Mesh(rGeo, mat.clone()));
   }
 
   /* ── Japan Aesthetics: Sakura & Pom-Pom Trees ── */
-
-  _buildTrees(points) {
+  _buildTrees(trackPoints, pitLanePoints = []) {
+    const allPoints = [...trackPoints, ...pitLanePoints];
     // Find track bounds to scatter trees outside
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const p of points) {
+    for (const p of allPoints) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
     }
@@ -445,17 +543,18 @@ export class Track3D {
         const x = minX - 200 + Math.random() * (maxX - minX + 400);
         const z = minZ - 200 + Math.random() * (maxZ - minZ + 400);
         
-        // Find distance to nearest track point
+        // Find distance to nearest track point (Main or Pit)
         let minDistSq = Infinity;
         let nearestY = 0;
-        for (let j = 0; j < points.length; j += 10) {
-            const pt = points[j];
+        for (let j = 0; j < allPoints.length; j += 10) {
+            const pt = allPoints[j];
             const d2 = (x - pt.x)**2 + (z - pt.z)**2;
             if (d2 < minDistSq) { minDistSq = d2; nearestY = pt.y || 0; }
         }
 
         const dist = Math.sqrt(minDistSq);
-        if (dist > 35 && dist < 300) {
+        // Prompt Logic: Trees must be 120m+ from track
+        if (dist > 120 && dist < 450) {
             const treeGroup = new THREE.Group();
             
             // Randomly choose Sakura or Green
@@ -484,8 +583,24 @@ export class Track3D {
                 treeGroup.add(foliage);
             }
 
-            treeGroup.position.set(x, nearestY - 5 + (Math.random() * 2), z); // Sit on terrain
-            if (nearestY < -5) treeGroup.position.y = -10; // Floor limit
+            // Sync tree Y with the new 6m gap terrain molding
+            let terrainY = -10 + (Math.sin(x * 0.02) * Math.sin(z * 0.02)) * 12;
+            const trackRadius = 40.0;
+            const falloff = 100;
+            if (dist < trackRadius) {
+                terrainY = nearestY - 3.0; // Matches -3.0 terrain duck
+            } else if (dist < trackRadius + falloff) {
+                const t = 1.0 - (dist - trackRadius) / falloff;
+                const smoothT = t * t * (3 - 2 * t);
+                const jitter = (Math.sin(x * 0.1) * Math.cos(z * 0.1)) * 4.0 * (1.0 - smoothT);
+                terrainY = (nearestY - 3.0) * smoothT + jitter;
+            }
+            
+            // Apply hill capping to trees as well
+            if (terrainY > nearestY - 4.0) terrainY = nearestY - 4.0;
+
+            treeGroup.position.set(x, terrainY, z);
+            if (terrainY < -25) treeGroup.position.y = -25; // Deeper floor limit for 6m gap
             
             treeGroup.scale.setScalar(0.8 + Math.random() * 1.5);
             treeGroup.rotation.y = Math.random() * Math.PI;
@@ -542,20 +657,20 @@ export class Track3D {
     
     // Pillars (Slightly shorter and thinner)
     const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
-    lp.position.set(this.trackWidth/2 + 1.5, 6, 0);
+    lp.position.set(this.trackWidth/2 + 1.5, 6 + 1.5, 0);
     torii.add(lp);
     
     const rp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
-    rp.position.set(-(this.trackWidth/2 + 1.5), 6, 0);
+    rp.position.set(-(this.trackWidth/2 + 1.5), 6 + 1.5, 0);
     torii.add(rp);
     
     // Top Beam
     const beam = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 6, 1.2, 1.5), toriiMat);
-    beam.position.y = 11;
+    beam.position.y = 11 + 1.5;
     torii.add(beam);
     
     const beamTop = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 10, 1.0, 2.0), toriiMat);
-    beamTop.position.y = 12.5;
+    beamTop.position.y = 12.5 + 1.5;
     torii.add(beamTop);
 
     torii.position.set(p0.x, p0.y, p0.z);
@@ -575,7 +690,7 @@ export class Track3D {
     for (const idx of indices) {
         const p = points[idx];
         const block = new THREE.Mesh(blockGeo, blockMat);
-        block.position.set(p.x, (p.y||0) + 8, p.z);
+        block.position.set(p.x, (p.y||0) + 1.5 + 8, p.z);
         this.group.add(block);
         this.questionBlocks.push(block);
     }
@@ -592,9 +707,9 @@ export class Track3D {
         opacity: 0.9,
         roughness: 0.3,
         metalness: 0.1,
-        emissive: 0x444444, // Slight glow for extreme visibility
+        emissive: 0x444444,
         side: THREE.DoubleSide,
-        depthWrite: false, // Prevents self-clipping with the underlying track
+        depthWrite: false, 
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1
@@ -604,9 +719,8 @@ export class Track3D {
         const segPoints = points.slice(i, i + dashLength + 1);
         if (segPoints.length < 2) continue;
         
-        // Extrude a narrow strip (0.6m wide)
         const { geometry } = this._extrudeTrackStrip(segPoints, 0.6, { 
-            yOffset: 0.23, // Layer 3
+            yOffset: 1.53, // Above main road (1.5)
             closeLoop: false 
         });
         
@@ -779,7 +893,7 @@ export class Track3D {
       if (drsPoints.length < 2) continue;
 
       const { geometry: drsGeo } = this._extrudeTrackStrip(drsPoints, this.trackWidth - 0.5, {
-        yOffset: 0.22, // Layer 2
+        yOffset: 1.55, // Layer 2
         closeLoop: false 
       });
 
@@ -799,7 +913,6 @@ export class Track3D {
     }
   }
 
-  /* ── Sector Markers (Japan Themed Lanterns) ── */
   _buildSectorMarkers(points) {
     const indices = this.sectorIndices.length > 0 ? this.sectorIndices : [Math.floor(points.length / 3), Math.floor(points.length * 2 / 3)];
 
@@ -810,8 +923,8 @@ export class Track3D {
 
       // Glowing Ground Strip
       const { geometry: stripGeo } = this._extrudeTrackStrip([points[idx], points[(idx+1)%points.length]], this.trackWidth, { 
-        yOffset: 0.24, // Layer 4
-        closeLoop: false // CRITICAL: Sector line is an open segment
+        yOffset: 1.54, // Layer 4
+        closeLoop: false 
       });
       const stripMat = new THREE.MeshStandardMaterial({ 
           color, 
@@ -856,7 +969,7 @@ export class Track3D {
       color: 0x33333a,
       roughness: 0.7,
       metalness: 0.05,
-      yOffset: 0.15,
+      yOffset: 1.5, // Match main road (1.5)
       closeLoop: false
     });
     const mesh = new THREE.Mesh(geometry, material);
@@ -864,11 +977,11 @@ export class Track3D {
     this.group.add(mesh);
 
     // Pit lane edge
-    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 0.15, false);
+    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 1.51, false);
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0x444450 });
     this.group.add(new THREE.Mesh(edgeGeo, edgeMat));
 
-    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 0.15, false);
+    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 1.51, false);
     this.group.add(new THREE.Mesh(edgeGeo2, edgeMat.clone()));
   }
 
@@ -1021,13 +1134,15 @@ export class Track3D {
   }
 
   /**
-   * Build a vertical skirt to hide the underside of floating tracks.
+   * Build a vertical wall/skirt following the track points
    */
-  _buildVerticalSkirt(points, offset, topYOffset, bottomYOffset) {
-    const vertices = [];
-    const indices = [];
-
-    for (let i = 0; i < points.length; i++) {
+  _buildVerticalSkirt(points, offset, topYOffset = 0, bottomYOffset = -2, closeLoop = true) {
+      if (points.length < 2) return new THREE.BufferGeometry();
+  
+      const vertices = [];
+      const indices = [];
+  
+      for (let i = 0; i < points.length; i++) {
         const p = points[i];
         const pNext = points[(i + 1) % points.length];
         const pPrev = points[(i - 1 + points.length) % points.length];
@@ -1057,13 +1172,15 @@ export class Track3D {
       }
   
       // Close loop
-      const last = (points.length - 1) * 2;
-      if (offset > 0) {
-          indices.push(last, 0, last + 1);
-          indices.push(last + 1, 0, 1);
-      } else {
-          indices.push(last, last + 1, 0);
-          indices.push(last + 1, 1, 0);
+      if (closeLoop) {
+          const last = (points.length - 1) * 2;
+          if (offset > 0) {
+              indices.push(last, 0, last + 1);
+              indices.push(last + 1, 0, 1);
+          } else {
+              indices.push(last, last + 1, 0);
+              indices.push(last + 1, 1, 0);
+          }
       }
   
       const geo = new THREE.BufferGeometry();
@@ -1291,7 +1408,215 @@ export class Track3D {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
       geo.setIndex(indices);
-      return geo;
+  }
+
+  /* ─────────────────────────────────────────────
+     Suzuka-Specific 3D Environment (Ponds & Buildings)
+     ───────────────────────────────────────────── */
+
+  /** Create 3D water features (ponds/lakes) */
+  _buildEnvironment() {
+    if (!this.circuitData || !this.circuitData.ponds || !this.transform) return;
+
+    const { scale, cx, cy } = this.transform;
+    const waterMat = new THREE.MeshStandardMaterial({
+        color: 0x009dff,
+        metalness: 0.1,
+        roughness: 0.2,
+        transparent: true,
+        opacity: 0.8,
+        emissive: 0x003366,
+        emissiveIntensity: 0.8
+    });
+
+    for (const pond of this.circuitData.ponds) {
+      const shape = new THREE.Shape();
+      let avgX = 0, avgZ = 0;
+      pond.coords.forEach((c, i) => {
+        const p_raw = this._projectLatLng(c[0], c[1]);
+        const x = (p_raw.x - cx) * scale;
+        const z = -(p_raw.y - cy) * scale;
+        if (i === 0) shape.moveTo(x, z);
+        else shape.lineTo(x, z);
+        avgX += x; avgZ += z;
+      });
+      avgX /= pond.coords.length;
+      avgZ /= pond.coords.length;
+      
+      const geo = new THREE.ShapeGeometry(shape);
+      geo.rotateX(-Math.PI / 2); // Sit flat on the XZ plane
+      const mesh = new THREE.Mesh(geo, waterMat);
+      
+      // Sample elevation at pond center to avoid being buried
+      const elev = this._getElevationAtWorld(avgX, avgZ);
+      mesh.position.y = elev - 1.2; // Sit firmly ON the recessed terrain
+      this.group.add(mesh);
+    }
+  }
+
+  /** Build 3D models for landmarks (Podium, Pit Building) */
+  _buildLandmarks() {
+    if (!this.circuitData || !this.circuitData.buildings || !this.transform) return;
+
+    const { scale, cx, cy } = this.transform;
+    const buildingMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.8, side: THREE.DoubleSide });
+
+    for (const building of this.circuitData.buildings) {
+        const shape = new THREE.Shape();
+        let avgX = 0, avgZ = 0;
+        building.coords.forEach((c, i) => {
+            const p_raw = this._projectLatLng(c[0], c[1]);
+            const x = (p_raw.x - cx) * scale;
+            const z = -(p_raw.y - cy) * scale;
+            if (i === 0) shape.moveTo(x, z);
+            else shape.lineTo(x, z);
+            avgX += x; avgZ += z;
+        });
+        avgX /= building.coords.length;
+        avgZ /= building.coords.length;
+
+        // Correct Extrusion: grow UP along +Y
+        const height = building.heightM * scale;
+        const extrudeSettings = { depth: height, bevelEnabled: false };
+        const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+        
+        // Shape is in XY plane. Extrusion is in +Z.
+        // We want +Z to become +Y.
+        // Rotate +90 around X: X stays X, Y becomes -Z, Z becomes Y.
+        geo.rotateX(Math.PI / 2);
+        
+        const mesh = new THREE.Mesh(geo, buildingMat);
+        const elev = this._getElevationAtWorld(avgX, avgZ);
+        mesh.position.y = elev + 1.5; // Match elevated track level
+        this.group.add(mesh);
+
+        // Add a "Roof" (top face)
+        const roofGeo = new THREE.ShapeGeometry(shape);
+        roofGeo.rotateX(Math.PI / 2);
+        const roof = new THREE.Mesh(roofGeo, roofMat);
+        roof.position.y = elev + height + 1.6;
+        this.group.add(roof);
+
+        // Podium Detail
+        if (building.type === 'pit') {
+            const p0_raw = this._projectLatLng(building.coords[0][0], building.coords[0][1]);
+            const p0_x = (p0_raw.x - cx) * scale;
+            const p0_z = -(p0_raw.y - cy) * scale;
+
+            const podiumGeo = new THREE.BoxGeometry(15, 3, 8);
+            const podiumMat = new THREE.MeshStandardMaterial({ color: 0xe10600, emissive: 0x440000 });
+            const podium = new THREE.Mesh(podiumGeo, podiumMat);
+            podium.position.set(p0_x, elev + height + 3.0, p0_z);
+            this.group.add(podium);
+        }
+    }
+  }
+
+  /** Sample elevation based on nearest track fraction */
+  _getElevationAtWorld(wx, wz) {
+    if (!this.circuitData.elevationProfile || !this.trackPoints || this.trackPoints.length === 0) return 0;
+    
+    // Find nearest track point to find the local fraction
+    let minDistSq = Infinity;
+    let nearestIdx = 0;
+    for (let i = 0; i < this.trackPoints.length; i += 4) {
+        const pt = this.trackPoints[i];
+        const d2 = (wx - pt.x)**2 + (wz - pt.z)**2;
+        if (d2 < minDistSq) {
+            minDistSq = d2;
+            nearestIdx = i;
+        }
+    }
+    
+    const fraction = nearestIdx / this.trackPoints.length;
+    return this._interpolateElevation(fraction, this.circuitData.elevationProfile);
+  }
+
+  /** Mercator projection for lat/lng to world coordinates */
+  _projectLatLng(lng, lat) {
+    const DEG2RAD = Math.PI / 180;
+    const R = 6378137;
+    return {
+      x: R * lng * DEG2RAD,
+      y: R * Math.log(Math.tan(Math.PI / 4 + (lat * DEG2RAD) / 2)),
+    };
+  }
+
+  /** Build high-fidelity bridge details: underside slab and railings */
+  _buildBridgeStructure(points) {
+    if (!this.circuitData || !this.circuitData.bridge) return;
+    const bridge = this.circuitData.bridge;
+    const overRange = bridge.overIdxRange;
+    if (!overRange) return;
+
+    const overPoints = points.slice(overRange[0], overRange[1]);
+    const bridgeMat = new THREE.MeshStandardMaterial({ color: 0x88888a, roughness: 0.8 });
+    const railingMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.5 });
+
+    // 1. Concrete Underside Slab (Prompt Logic)
+    const slabGeo = this._buildEdgeStrip(overPoints, -this.trackWidth/2, this.trackWidth/2, 2.7, false); // Recessed -0.3m
+    const slab = new THREE.Mesh(slabGeo, bridgeMat);
+    this.group.add(slab);
+
+    // 2. Railing Pillars & Horizontal Bars
+    const postGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.2, 4);
+    const barGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.0, 4); 
+    barGeo.rotateZ(Math.PI / 2);
+
+    for (let i = 0; i < overPoints.length; i += 2) {
+        const p = overPoints[i];
+        const pNext = overPoints[(i+1)%overPoints.length];
+        const angle = Math.atan2(pNext.x - p.x, pNext.z - p.z) + Math.PI/2;
+        const dist = Math.sqrt((pNext.x - p.x)**2 + (pNext.z - p.z)**2);
+
+        // Left Railing Post
+        const lPost = new THREE.Mesh(postGeo, railingMat);
+        lPost.position.set(p.x + Math.cos(angle) * (this.trackWidth/2 + 0.2), p.y + 3.6, p.z - Math.sin(angle) * (this.trackWidth/2 + 0.2));
+        this.group.add(lPost);
+
+        // Right Railing Post
+        const rPost = new THREE.Mesh(postGeo, railingMat);
+        rPost.position.set(p.x - Math.cos(angle) * (this.trackWidth/2 + 0.2), p.y + 3.6, p.z + Math.sin(angle) * (this.trackWidth/2 + 0.2));
+        this.group.add(rPost);
+
+        if (i < overPoints.length - 1) {
+            // Horizontal Bar (scaled to segment distance)
+            const lBar = new THREE.Mesh(barGeo, railingMat);
+            lBar.scale.x = dist;
+            lBar.position.set(p.x + Math.cos(angle) * (this.trackWidth/2 + 0.2), p.y + 3.9, p.z - Math.sin(angle) * (this.trackWidth/2 + 0.2));
+            lBar.rotation.y = angle;
+            this.group.add(lBar);
+        }
+    }
+  }
+
+  /** Build 3D Section Labels (Spoon, 130R, etc.) */
+  _buildSectionMarkers(points) {
+    if (!this.circuitData || !this.circuitData.sectionMarkers) return;
+
+    for (const marker of this.circuitData.sectionMarkers) {
+        const pIdx = Math.floor(marker.t * points.length);
+        const p = points[pIdx];
+        if (!p) continue;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.font = 'bold 36px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'white';
+        ctx.fillText(marker.label, 128, 45);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: tex });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.scale.set(30, 7, 1);
+        sprite.position.set(p.x, p.y + 12.0, p.z); // High hover visibility
+        this.group.add(sprite);
+    }
   }
 
   update(timestamp) {

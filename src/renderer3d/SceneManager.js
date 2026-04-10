@@ -536,11 +536,8 @@ export class SceneManager {
       };
     });
 
-    // Apply Functional Bridge Elevation for Suzuka Figure-Eight
-    this._applySuzukaBridgeElevation(this.trackPoints3D);
-
     this.pitLanePoints3D = pitLanePoints.map((p, i) => {
-      // Very naive pit lane elevation matching start/finish for now
+      // Pit lane elevation matching start/finish
       let elevatedY = 0;
       if (circuitData && circuitData.elevationProfile) elevatedY = circuitData.elevationProfile[0].elevation;
       return {
@@ -549,6 +546,14 @@ export class SceneManager {
         z: -(p.y - cy) * scale,
       };
     });
+
+    if (this.track3D) {
+      this.track3D.build(this.trackPoints3D, this.pitLanePoints3D, circuitData, {
+        scale: scale,
+        cx: cx,
+        cy: cy
+      });
+    }
 
     // Store transform params for toWorldCoords
     this._trackScale = scale;
@@ -616,43 +621,55 @@ export class SceneManager {
     return 0;
   }
 
-  _applySuzukaBridgeElevation(points) {
-    if (points.length < 100) return;
-    let crossIdx = -1;
-    for (let i = 0; i < points.length; i += 5) {
-      const p1 = points[i], p2 = points[(i + 10) % points.length];
-      for (let j = i + 50; j < points.length; j += 5) {
-        const p3 = points[j], p4 = points[(j + 10) % points.length];
-        
-        // Line-segment intersection test
-        const x1=p1.x, y1=p1.z, x2=p2.x, y2=p2.z, x3=p3.x, y3=p3.z, x4=p4.x, y4=p4.z;
-        const det = (x2-x1)*(y4-y3)-(x4-x3)*(y2-y1);
-        if (det !== 0) {
-          const l = ((y4-y3)*(x4-x1)+(x3-x4)*(y4-y1))/det;
-          const g = ((y1-y2)*(x4-x1)+(x1-x2)*(y4-y1))/det;
-          if (l>0 && l<1 && g>0 && g<1) {
-            crossIdx = i; break;
-          }
-        }
-      }
-      if (crossIdx !== -1) break;
+  _applySuzukaBridgeElevation(points, circuitData) {
+    if (!circuitData || !circuitData.bridge || !circuitData.bridge.overIdxRange || !circuitData.bridge.underIdxRange) return;
+    
+    // We want the overpass to securely cross ABOVE the underpass.
+    // The overpass base elevation might be low (e.g. -20). Let's push it up!
+    const overRange = circuitData.bridge.overIdxRange;
+    const underRange = circuitData.bridge.underIdxRange;
+
+    // Find average underpass height
+    let underY = 0;
+    let underCount = 0;
+    for (let i = underRange[0]; i <= underRange[1]; i++) {
+        if (points[i]) { underY += points[i].y; underCount++; }
     }
+    const avgUnderY = underCount > 0 ? underY / underCount : 15;
 
-    if (crossIdx === -1) return;
+    // We want the bridge peak to be at least 25 meters above the underpass
+    const targetPeakY = avgUnderY + 25;
 
-    const rampLen = 120;
-    const bridgeHeight = 15;
+    // Find the center of the overpass
+    const bridgeCenter = Math.floor((overRange[0] + overRange[1]) / 2);
+    // The overRange represents the peak section of the bridge. Let's create a ramp.
+    const rampLen = Math.max(25, (overRange[1] - overRange[0]) * 1.5);
+
     for (let i = 0; i < points.length; i++) {
-        let dist = Math.abs(i - crossIdx);
+        let dist = Math.abs(i - bridgeCenter);
         if (dist > points.length / 2) dist = points.length - dist;
+        
         if (dist < rampLen) {
+            // Find base track height originally set by elevationProfile
+            const baseY = points[i].y;
+            // The lift required to reach the target peak
+            const requiredLift = targetPeakY - baseY;
+
+            // Apply a smooth blend to lift the track seamlessly
             const t = 1.0 - (dist / rampLen);
             const smoothT = t * t * (3 - 2 * t);
-            points[i].y += (bridgeHeight * smoothT);
-            points[i].isBridge = true;
-        } else {
-            points[i].isBridge = false;
+            
+            // Only lift if the required lift is positive (which it definitely is for -20 -> +40)
+            if (requiredLift > 0) {
+                points[i].y += (requiredLift * smoothT);
+            }
         }
+    }
+
+    // ONLY mark the overpass sections as bridge points. 
+    // This allows the terrain to mold correctly to the underpass.
+    for (let i = overRange[0]; i <= overRange[1]; i++) {
+        if (points[i]) points[i].isBridge = true;
     }
   }
 
@@ -747,7 +764,10 @@ export class SceneManager {
       }
     }
 
-    return { x: wx, y: groundY, z: wz, pitch: pitch };
+    // Sync with Track3D visual offset (+3.0m) to ensure karts sit on the surface.
+    // This combined with a -3.0m terrain duck creates the 6m separation.
+    const VISUAL_OFFSET = 3.0;
+    return { x: wx, y: groundY + VISUAL_OFFSET, z: wz, pitch: pitch };
   }
 
   /**

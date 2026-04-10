@@ -421,12 +421,29 @@ export class TrackRenderer {
 
     // 1. Grass runoff
     this._strokeTrack(ctx, tw + 22 * this.zoom, '#193319');
+    
+    // 1b. Environment (Ponds)
+    if (this.circuitData && this.circuitData.ponds) {
+      this._drawEnvironment(ctx);
+    }
+
     // 2. Gravel trap
     this._strokeTrack(ctx, tw + 14 * this.zoom, '#2a2518');
     // 3. Kerbs
     this._strokeTrackDashed(ctx, tw + 8 * this.zoom, '#cc2200', '#fff', 10, 10);
-    // 4. Asphalt
+    // 4. Asphalt (Main Track Surface)
     this._strokeTrack(ctx, tw, '#333338');
+
+    // 4b. Elevation Shading (Hills)
+    if (this.circuitData && this.circuitData.elevationProfile) {
+      this._drawElevationShading(ctx, tw);
+    }
+
+    // 4c. Bridge (Overpass)
+    if (this.circuitData && this.circuitData.bridge) {
+      this._drawBridgeOverlap(ctx, tw);
+    }
+
     // 5. Center line
     this._strokeTrackDashed(ctx, 1, 'rgba(255,255,255,0.07)', null, 14, 18);
 
@@ -438,6 +455,11 @@ export class TrackRenderer {
 
     // 8. Sector markers
     this._drawSectorMarkers(ctx, tw);
+
+    // 8b. Landmarks (Buildings / Podium)
+    if (this.circuitData && this.circuitData.buildings) {
+        this._drawLandmarks(ctx);
+    }
 
     // 9. Circuit name
     if (this.circuitData) this._drawCircuitName(ctx, w, h);
@@ -603,6 +625,157 @@ export class TrackRenderer {
     ctx.setLineDash([]);
   }
 
+  /* ─────────────────────────────────────────────
+     Suzuka-Specific Environment Features
+     ───────────────────────────────────────────── */
+
+  /** Draw water features (ponds/lakes) */
+  _drawEnvironment(ctx, projection = null) {
+    if (!this.circuitData || !this.circuitData.ponds) return;
+    const project = projection || this.toCanvas.bind(this);
+    ctx.save();
+    for (const pond of this.circuitData.ponds) {
+      ctx.beginPath();
+      pond.coords.forEach((c, i) => {
+        const p = this._projectLatLng(c[0], c[1]);
+        const cp = project(p.x, p.y);
+        if (i === 0) ctx.moveTo(cp.cx, cp.cy);
+        else ctx.lineTo(cp.cx, cp.cy);
+      });
+      ctx.closePath();
+      
+      const grad = ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+      grad.addColorStop(0, '#0099ff');
+      grad.addColorStop(1, '#0055aa');
+      ctx.fillStyle = grad;
+      ctx.fill();
+      
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = projection ? 1 : 2 * this.zoom;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Draw track elevation shading (hills) using luminosity */
+  _drawElevationShading(ctx, tw) {
+    if (!this.circuitData || !this.circuitData.elevationProfile) return;
+    const profile = this.circuitData.elevationProfile;
+    const pts = this.trackPoints;
+    const count = pts.length;
+
+    ctx.save();
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = tw;
+
+    for (let i = 0; i < count; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i+1) % count];
+        const cp1 = this.toCanvas(p1.x, p1.y);
+        const cp2 = this.toCanvas(p2.x, p2.y);
+
+        const frac = i / count;
+        const elev = this._interpolateElevation(frac, profile);
+        const nextFrac = (i + 1) / count;
+        const nextElev = this._interpolateElevation(nextFrac, profile);
+        const slope = (nextElev - elev) * 5.0;
+
+        const luminosity = Math.max(-60, Math.min(60, slope * 1.5));
+        const alpha = Math.abs(luminosity) / 100;
+        const color = luminosity > 0 ? '255, 255, 255' : '0, 0, 0';
+        ctx.strokeStyle = `rgba(${color}, ${alpha * 0.6})`;
+        
+        ctx.beginPath();
+        ctx.moveTo(cp1.cx, cp1.cy);
+        ctx.lineTo(cp2.cx, cp2.cy);
+        ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Interpolate elevation for track progress */
+  _interpolateElevation(fraction, profile) {
+    if (!profile || profile.length === 0) return 0;
+    for (let i = 0; i < profile.length - 1; i++) {
+        if (fraction >= profile[i].trackFraction && fraction <= profile[i+1].trackFraction) {
+            const t = (fraction - profile[i].trackFraction) / (profile[i+1].trackFraction - profile[i].trackFraction);
+            return profile[i].elevation + (profile[i+1].elevation - profile[i].elevation) * t;
+        }
+    }
+    return 0;
+  }
+
+  /** Draw bridge crossover (Suzuka special) */
+  _drawBridgeOverlap(ctx, tw) {
+    if (!this.circuitData || !this.circuitData.bridge) return;
+    const bridge = this.circuitData.bridge;
+    const pts = this.trackPoints;
+    
+    ctx.save();
+    const shadowOff = 4 * this.zoom;
+    ctx.beginPath();
+    for (let i = bridge.overIdxRange[0]; i <= bridge.overIdxRange[1]; i++) {
+        if (!pts[i]) continue;
+        const p = this.toCanvas(pts[i].x, pts[i].y);
+        if (i === bridge.overIdxRange[0]) ctx.moveTo(p.cx + shadowOff, p.cy + shadowOff);
+        else ctx.lineTo(p.cx + shadowOff, p.cy + shadowOff);
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = tw + 8 * this.zoom;
+    ctx.stroke();
+
+    ctx.beginPath();
+    for (let i = bridge.overIdxRange[0]; i <= bridge.overIdxRange[1]; i++) {
+        if (!pts[i]) continue;
+        const p = this.toCanvas(pts[i].x, pts[i].y);
+        if (i === bridge.overIdxRange[0]) ctx.moveTo(p.cx, p.cy);
+        else ctx.lineTo(p.cx, p.cy);
+    }
+    
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = tw + 4 * this.zoom;
+    ctx.stroke();
+    ctx.strokeStyle = '#333338';
+    ctx.lineWidth = tw;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Draw landmarks like the pit building and podium */
+  _drawLandmarks(ctx, projection = null) {
+    if (!this.circuitData || !this.circuitData.buildings) return;
+    const project = projection || this.toCanvas.bind(this);
+    ctx.save();
+    for (const building of this.circuitData.buildings) {
+        ctx.beginPath();
+        building.coords.forEach((c, i) => {
+            const p = this._projectLatLng(c[0], c[1]);
+            const cp = project(p.x, p.y);
+            if (i === 0) ctx.moveTo(cp.cx, cp.cy);
+            else ctx.lineTo(cp.cx, cp.cy);
+        });
+        ctx.closePath();
+        
+        ctx.fillStyle = '#444';
+        ctx.fill();
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        
+        if (building.type === 'pit' && !projection) {
+            const coords = building.coords;
+            const last = coords[coords.length - 1];
+            const p1 = this._projectLatLng(last[0], last[1]);
+            const cp1 = project(p1.x, p1.y);
+            ctx.fillStyle = '#e10600';
+            ctx.fillRect(cp1.cx - 5, cp1.cy - 10, 10, 10);
+            ctx.strokeStyle = '#fff';
+            ctx.strokeRect(cp1.cx - 5, cp1.cy - 10, 10, 10);
+        }
+    }
+    ctx.restore();
+  }
+
   _drawFinishLine(ctx, tw) {
     if (this.trackPoints.length < 2) return;
     const p0 = this.toCanvas(this.trackPoints[0].x, this.trackPoints[0].y);
@@ -739,6 +912,10 @@ export class TrackRenderer {
       cx: x * miniScale + miniOffX,
       cy: -(y * miniScale) + miniOffY
     });
+
+    // Draw environment features in minimap
+    this._drawEnvironment(ctx, toMiniCanvas);
+    this._drawLandmarks(ctx, toMiniCanvas);
 
     // Draw main track shape
     ctx.beginPath();

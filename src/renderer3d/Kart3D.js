@@ -602,7 +602,9 @@ export class Kart3D {
     const posX = this._currentPos.x + (rightX * this.lateralOffset);
     const posZ = this._currentPos.z + (rightZ * this.lateralOffset);
 
-    this.mesh.position.set(posX, this._currentPos.y, posZ);
+    // Apply 0.25 offset so tires rest exactly on top of the asphalt layer (which is at +0.20)
+    const tireGroundOffset = 0.25; 
+    this.mesh.position.set(posX, this._currentPos.y + tireGroundOffset, posZ);
 
     let ad = this.targetAngle - this.currentAngle;
     while (ad > Math.PI) ad -= Math.PI * 2;

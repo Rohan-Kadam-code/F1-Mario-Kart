@@ -10,6 +10,7 @@ export class MiniMap {
     this.container.appendChild(this.canvas);
 
     this.trackPoints = [];
+    this.circuitData = null;
     this.bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     this.padding = 10;
     this.scale = 1;
@@ -18,8 +19,9 @@ export class MiniMap {
     window.addEventListener('resize', () => this.resize());
   }
 
-  setTrackData(points) {
+  setTrackData(points, circuitData = null) {
     this.trackPoints = points || [];
+    this.circuitData = circuitData;
     if (this.trackPoints.length === 0) return;
 
     // Calculate bounds for normalized rendering
@@ -109,9 +111,58 @@ export class MiniMap {
     // Clear dynamic layer
     this.ctx.clearRect(0, 0, this.canvas.width / window.devicePixelRatio, this.canvas.height / window.devicePixelRatio);
 
-    // 1. Draw static track shape as background
+    // 1. Draw Environment (Ponds)
+    if (this.circuitData && this.circuitData.ponds) {
+      this.ctx.save();
+      for (const pond of this.circuitData.ponds) {
+        this.ctx.beginPath();
+        pond.coords.forEach((c, i) => {
+          const pRaw = this._projectLatLng(c[0], c[1]);
+          const p = this._mapCoord(pRaw.x, pRaw.y);
+          if (i === 0) this.ctx.moveTo(p.x, p.y);
+          else this.ctx.lineTo(p.x, p.y);
+        });
+        this.ctx.closePath();
+        this.ctx.fillStyle = '#0055aa';
+        this.ctx.fill();
+        this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
+    // 2. Draw Landmarks (Buildings)
+    if (this.circuitData && this.circuitData.buildings) {
+      this.ctx.save();
+      for (const building of this.circuitData.buildings) {
+        this.ctx.beginPath();
+        building.coords.forEach((c, i) => {
+          const pRaw = this._projectLatLng(c[0], c[1]);
+          const p = this._mapCoord(pRaw.x, pRaw.y);
+          if (i === 0) this.ctx.moveTo(p.x, p.y);
+          else this.ctx.lineTo(p.x, p.y);
+        });
+        this.ctx.closePath();
+        this.ctx.fillStyle = '#666';
+        this.ctx.fill();
+        this.ctx.strokeStyle = '#fff';
+        this.ctx.lineWidth = 0.5;
+        this.ctx.stroke();
+
+        if (building.type === 'pit') {
+            const p1 = this._projectLatLng(building.coords[0][0], building.coords[0][1]);
+            const cp1 = this._mapCoord(p1.x, p1.y);
+            this.ctx.fillStyle = '#e10600';
+            this.ctx.fillRect(cp1.x - 3, cp1.y - 3, 6, 6);
+        }
+      }
+      this.ctx.restore();
+    }
+
+    // 3. Draw static track shape as background
     this.ctx.beginPath();
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
     this.ctx.lineWidth = 4;
     this.ctx.lineCap = 'round';
     this.ctx.lineJoin = 'round';
@@ -154,5 +205,14 @@ export class MiniMap {
       this.ctx.lineWidth = isTracked ? 2 : 1;
       this.ctx.stroke();
     }
+  }
+
+  _projectLatLng(lng, lat) {
+    const DEG2RAD = Math.PI / 180;
+    const R = 6378137;
+    return {
+      x: R * lng * DEG2RAD,
+      y: R * Math.log(Math.tan(Math.PI / 4 + lat * DEG2RAD / 2)),
+    };
   }
 }

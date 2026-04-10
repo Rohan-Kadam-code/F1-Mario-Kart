@@ -388,9 +388,9 @@ async function onSessionSelected(session) {
     }
 
     // Set track data in scene manager and build 3D track
-    sceneManager.setTrackData(trackPoints2D, pitLanePoints2D);
+    sceneManager.setTrackData(trackPoints2D, pitLanePoints2D, matchedCircuit);
     track3D.build(sceneManager.trackPoints3D, sceneManager.pitLanePoints3D || [], matchedCircuit);
-    miniMap.setTrackData(trackPoints2D);
+    miniMap.setTrackData(trackPoints2D, matchedCircuit);
 
     // Store 2D track data for fallback position calculations
     state.trackPoints2D = trackPoints2D;

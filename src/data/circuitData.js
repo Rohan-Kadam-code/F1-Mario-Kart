@@ -31,12 +31,12 @@ const CIRCUITS = [
     poleSide: 'right',
     elevationProfile: [
       { trackFraction: 0.00, elevation: 0 },
-      { trackFraction: 0.15, elevation: -20 }, // Turn 1/2 dip
-      { trackFraction: 0.30, elevation: 35 },  // Top of the Esses
-      { trackFraction: 0.42, elevation: 15 },  // Degner drop
-      { trackFraction: 0.55, elevation: 40 },  // Climb up to Spoon
-      { trackFraction: 0.70, elevation: -20 }, // Run down to 130R
-      { trackFraction: 0.85, elevation: 10 },  // Casio Triangle climb
+      { trackFraction: 0.15, elevation: -5 },   
+      { trackFraction: 0.35, elevation: 15 },   
+      { trackFraction: 0.57, elevation: -3.5 }, // UNDERPASS (Degner exit, Index 98)
+      { trackFraction: 0.65, elevation: 25 },   
+      { trackFraction: 0.77, elevation: 11.0 }, // OVERPASS (Back straight, Index 133)
+      { trackFraction: 0.90, elevation: 5 },    
       { trackFraction: 1.00, elevation: 0 }
     ],
     // Main track centerline [lng, lat]
@@ -99,6 +99,51 @@ const CIRCUITS = [
     ],
     pitEntryTrackFraction: 0.88,
     pitExitTrackFraction: 0.06,
+    // Environment Features
+    ponds: [
+      {
+        name: 'S-Curve Lake',
+        coords: [
+          [136.5385, 34.8405], [136.5395, 34.8408], [136.5405, 34.8405],
+          [136.5402, 34.8415], [136.5390, 34.8418], [136.5382, 34.8412]
+        ]
+      },
+      {
+        name: 'Hairpin Pond',
+        coords: [
+          [136.5295, 34.8465], [136.5305, 34.8468], [136.5308, 34.8470],
+          [136.5302, 34.8472], [136.5298, 34.8468], [136.5295, 34.8462]
+        ]
+      }
+    ],
+    buildings: [
+      {
+        name: 'Pit Building & Podium',
+        type: 'pit',
+        coords: [
+          [136.5375, 34.8458], [136.5405, 34.8430], [136.5410, 34.8435], [136.5380, 34.8463]
+        ],
+        heightM: 20
+      }
+    ],
+    // Bridge data: which segments are the "flyover" (over-under)
+    bridge: {
+      type: 'flyover',
+      overIdxRange: [124, 142], // Back straight section (True Overpass center ~133)
+      underIdxRange: [90, 106]   // Degner exit section (True Underpass center ~98)
+    },
+    // Section markers for labeling
+    sectionMarkers: [
+      { t: 0.0, label: 'S/F' },
+      { t: 0.05, label: 'T1' },
+      { t: 0.15, label: 'Esses' },
+      { t: 0.35, label: 'Dunlop' },
+      { t: 0.45, label: 'Degner' },
+      { t: 0.52, label: 'Hairpin' },
+      { t: 0.65, label: 'Spoon' },
+      { t: 0.82, label: '130R' },
+      { t: 0.92, label: 'Chicane' }
+    ]
   },
 
   // ─────────────────────────────────────────────
