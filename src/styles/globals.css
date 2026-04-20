@@ -1,0 +1,552 @@
+@import "tailwindcss";
+
+@theme {
+  --font-outfit: 'Outfit', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --color-bg-primary: #080810;
+  --color-bg-secondary: #0e0e1a;
+  --color-bg-tertiary: #151520;
+  --color-accent-f1: #e10600;
+  --color-accent-orange: #ff6b35;
+  --color-accent-neon: #00ff88;
+  --color-accent-purple: #a855f7;
+  --color-accent-cyan: #06b6d4;
+  --color-accent-gold: #fbbf24;
+}
+
+/* ===================================================
+   F1.Mario — Design System
+   =================================================== */
+:root {
+  --bg-primary: #080810;
+  --bg-secondary: #0e0e1a;
+  --bg-tertiary: #151520;
+  --bg-glass: rgba(14, 14, 26, 0.82);
+  --bg-glass-strong: rgba(14, 14, 26, 0.92);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-glow: rgba(225, 6, 0, 0.25);
+  --accent-primary: #e10600;
+  --accent-orange: #ff6b35;
+  --accent-neon: #00ff88;
+  --accent-purple: #a855f7;
+  --accent-cyan: #06b6d4;
+  --accent-gold: #fbbf24;
+  --text-primary: #f0f0f5;
+  --text-secondary: #9898b0;
+  --text-muted: #5a5a72;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Outfit', sans-serif;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+/* ===================================================
+   Component helpers (usable as className)
+   =================================================== */
+
+@layer components {
+  .glass-panel {
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-secondary);
+  }
+  .action-btn:hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-primary);
+    border-color: rgba(255,255,255,0.12);
+  }
+
+  .icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    background: rgba(255,255,255,0.05);
+    color: var(--text-secondary);
+    border: none;
+    transition: all 0.15s ease;
+  }
+  .icon-button:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--text-primary);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  .compound-btn {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.05);
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+  }
+  .compound-btn:hover, .compound-btn.selected {
+    background: rgba(255,255,255,0.15);
+    color: var(--text-primary);
+  }
+
+  .loader-bar {
+    width: 12rem;
+    height: 6px;
+    border-radius: 99px;
+    overflow: hidden;
+    margin-top: 8px;
+    background: rgba(255,255,255,0.1);
+  }
+  .loader-fill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.3s ease;
+    background: var(--accent-neon);
+  }
+}
+
+/* ===================================================
+   Position change animations for driver cards
+   =================================================== */
+
+@keyframes slideDown {
+  from { background: rgba(225, 6, 0, 0.2); }
+  to   { background: transparent; }
+}
+@keyframes slideUp {
+  from { background: rgba(0, 255, 136, 0.2); }
+  to   { background: transparent; }
+}
+.pos-gained { animation: slideUp 1s ease-out forwards; }
+.pos-lost   { animation: slideDown 1s ease-out forwards; }
+
+/* ===================================================
+   GAME LOADING SCREEN
+   =================================================== */
+
+.loading-grid {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(225, 6, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(225, 6, 0, 0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: gridScroll 4s linear infinite;
+  mask-image: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.5) 40%, rgba(0,0,0,0.5) 60%, transparent 100%);
+}
+@keyframes gridScroll {
+  0% { transform: perspective(500px) rotateX(40deg) translateY(0); }
+  100% { transform: perspective(500px) rotateX(40deg) translateY(60px); }
+}
+
+.loading-stripes {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg, transparent, transparent 80px,
+    rgba(225,6,0,0.015) 80px, rgba(225,6,0,0.015) 82px
+  );
+}
+
+@keyframes kartBounce {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-8px) rotate(2deg); }
+}
+@keyframes trailPulse {
+  0%, 100% { opacity: 0.3; width: 40px; }
+  50% { opacity: 0.8; width: 70px; }
+}
+.loading-kart { animation: kartBounce 1.2s ease-in-out infinite; filter: drop-shadow(0 4px 16px rgba(225,6,0,0.4)); }
+.loading-kart-trail {
+  animation: trailPulse 1.2s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(0,255,136,0.5), transparent);
+}
+
+.loading-progress-fill {
+  transition: width 0.4s cubic-bezier(0.4,0,0.2,1);
+  box-shadow: 0 0 12px rgba(225,6,0,0.4), 0 0 24px rgba(0,255,136,0.15);
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-orange), var(--accent-neon));
+}
+.loading-progress-glow {
+  transition: left 0.4s cubic-bezier(0.4,0,0.2,1);
+  background: var(--accent-neon);
+  box-shadow: 0 0 16px rgba(0,255,136,0.6);
+}
+
+.loading-checker {
+  background:
+    repeating-conic-gradient(
+      rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%
+    ) 0 0 / 20px 20px;
+  mask-image: linear-gradient(0deg, rgba(0,0,0,0.6) 0%, transparent 100%);
+}
+
+/* ===================================================
+   Zoom / Quality Controls overlay buttons
+   =================================================== */
+.canvas-controls-btn {
+  background: rgba(8,8,16,0.6) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  backdrop-filter: blur(8px);
+  transition: all 0.15s ease;
+}
+.canvas-controls-btn:hover {
+  background: rgba(255,255,255,0.08) !important;
+  border-color: rgba(255,255,255,0.15) !important;
+}
+
+/* ===================================================
+   Cache indicator
+   =================================================== */
+.cache-indicator {
+  position: absolute;
+  bottom: 60px;
+  right: 12px;
+  background: rgba(8,8,16,0.8);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  backdrop-filter: blur(8px);
+}
+.cache-indicator.hidden { display: none; }
+.cache-indicator.cached { border-color: rgba(0,255,136,0.3); color: var(--accent-neon); }
+.cache-bar { width: 80px; height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; margin: 3px 0; }
+.cache-bar div { height: 100%; background: var(--accent-neon); border-radius: 2px; transition: width 0.3s ease; }
+
+/* ===================================================
+   Session Selector
+   =================================================== */
+.session-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-selector select {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  font-family: 'Outfit', sans-serif;
+  cursor: pointer;
+  outline: none;
+}
+.session-selector select:hover { border-color: rgba(255,255,255,0.2); }
+.session-selector select option { background: var(--bg-secondary); }
+.session-selector .load-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.session-selector .load-btn:hover:not(:disabled) { background: #ff1a0f; }
+.session-selector .load-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ===================================================
+   Driver Cards
+   =================================================== */
+.driver-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  position: relative;
+}
+.driver-card:hover { background: rgba(255,255,255,0.04); }
+.driver-card.tracked-driver { background: rgba(225,6,0,0.08); }
+.team-stripe { width: 3px; height: 28px; border-radius: 2px; flex-shrink: 0; }
+.driver-position {
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  width: 18px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.driver-position.p1 { color: #fbbf24; }
+.driver-position.p2 { color: #9ca3af; }
+.driver-position.p3 { color: #b45309; }
+.driver-info { flex: 1; min-width: 0; }
+.driver-name { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.01em; }
+.driver-team { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.driver-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.driver-gap { font-size: 0.65rem; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); }
+.driver-tire { font-size: 0.62rem; font-weight: 600; }
+
+/* ===================================================
+   Playback Bar
+   =================================================== */
+.playback-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  height: 44px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.play-btn {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: transform 0.1s ease;
+}
+.play-btn:hover { transform: scale(1.05); }
+.scrubber-wrap { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.time-label { font-size: 0.68rem; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); white-space: nowrap; }
+.scrubber {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.1);
+  outline: none;
+  cursor: pointer;
+}
+.scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+}
+.speed-selector { display: flex; gap: 2px; }
+.speed-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-muted);
+  transition: all 0.12s ease;
+}
+.speed-btn:hover, .speed-btn.active {
+  background: rgba(225,6,0,0.15);
+  border-color: rgba(225,6,0,0.4);
+  color: var(--accent-primary);
+}
+
+/* ===================================================
+   Race Info Footer
+   =================================================== */
+.race-info-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  height: 36px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.info-label { font-size: 0.62rem; color: var(--text-muted); margin-right: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+.info-value { font-size: 0.7rem; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+.status-green { color: #22c55e; }
+.status-yellow { color: #fbbf24; }
+.status-red { color: var(--accent-primary); }
+.status-sc { color: var(--accent-primary); }
+.status-vsc { color: #fbbf24; }
+.race-info-item { display: flex; align-items: center; }
+.race-control-messages { flex: 1; display: flex; align-items: center; overflow: hidden; }
+.race-control-message { display: flex; align-items: center; gap: 6px; font-size: 0.68rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flag-icon { font-size: 0.75rem; }
+.rc-text { overflow: hidden; text-overflow: ellipsis; }
+.weather-widget { display: flex; gap: 8px; align-items: center; }
+.weather-item { display: flex; align-items: center; gap: 3px; }
+.weather-icon { font-size: 0.8rem; }
+.weather-value { font-size: 0.7rem; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+
+/* ===================================================
+   Event Feed
+   =================================================== */
+.event-feed { flex: 1; overflow-y: auto; padding: 4px 0; }
+.event-item {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  animation: fadeInDown 0.3s ease;
+}
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.event-icon { margin-right: 5px; }
+.event-time { font-family: 'JetBrains Mono', monospace; color: var(--text-muted); font-size: 0.6rem; margin-left: 4px; }
+
+/* ===================================================
+   Garage Panel
+   =================================================== */
+.garage-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: stretch;
+  background: rgba(4,4,12,0.85);
+  backdrop-filter: blur(6px);
+}
+.garage-overlay.hidden { display: none; }
+.garage-sidebar {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.garage-controls { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.control-group { display: flex; flex-direction: column; gap: 6px; }
+.control-group label { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.control-group input[type="color"] { width: 100%; height: 32px; border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm); cursor: pointer; background: transparent; }
+.control-group input[type="text"],
+.control-group input[type="number"] {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  padding: 5px 8px;
+  width: 100%;
+  outline: none;
+  font-family: 'Outfit', sans-serif;
+}
+.driver-nav { display: flex; align-items: center; gap: 8px; }
+.driver-nav button {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.current-driver-display {
+  flex: 1;
+  text-align: center;
+  font-size: 1.1rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary);
+}
+.compound-selector { display: flex; gap: 6px; flex-wrap: wrap; }
+.studio-controls-grid { display: flex; flex-direction: column; gap: 8px; }
+.studio-row { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; color: var(--text-secondary); }
+.studio-row input[type="range"] { flex: 1; }
+.studio-row input[type="checkbox"] { cursor: pointer; }
+.small-btn {
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.garage-canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ===================================================
+   Zoom/Quality Controls
+   =================================================== */
+.zoom-controls, .quality-toggle {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 10;
+}
+.zoom-controls { top: 12px; right: 12px; }
+.quality-toggle { top: 12px; left: 12px; flex-direction: row; }
+.zoom-controls button, .quality-toggle button {
+  background: rgba(8,8,16,0.7);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  backdrop-filter: blur(8px);
+}
+.zoom-controls button:hover, .quality-toggle button:hover { background: rgba(255,255,255,0.1); }
+.quality-toggle button.active { background: rgba(225,6,0,0.2); border-color: rgba(225,6,0,0.4); color: var(--accent-primary); }
+
+/* ===================================================
+   Status badge
+   =================================================== */
+.status-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid rgba(0,255,136,0.3);
+  color: var(--accent-neon);
+  background: rgba(0,255,136,0.08);
+}

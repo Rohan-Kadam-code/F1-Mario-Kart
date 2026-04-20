@@ -12,6 +12,7 @@
 import { SceneManager } from './renderer3d/SceneManager.js';
 import { Track3D } from './renderer3d/Track3D.js';
 import { Kart3D } from './renderer3d/Kart3D.js';
+import { preloadCarModel, isModelLoaded } from './renderer3d/CarModelLoader.js';
 import { Particles3D } from './renderer3d/Particles3D.js';
 import { Environment3D } from './renderer3d/Environment3D.js';
 import { getTeamColor } from './renderer/DriverSprite.js';
@@ -430,7 +431,7 @@ async function onSessionSelected(session) {
     updateLoadProgress(80);
 
     // Create 3D karts
-    createKarts();
+    await createKarts();
     updateLoadProgress(90);
 
     driverPanel.init(drivers);
@@ -635,11 +636,21 @@ function buildDriverLapTimes() {
   });
 }
 
-function createKarts() {
+async function createKarts() {
   // Dispose old karts
   for (const kart of state.karts.values()) kart.dispose();
   state.karts.clear();
   sceneManager.karts.clear();
+
+  // Try to preload the GLB model (non-blocking — falls back to procedural)
+  if (!isModelLoaded()) {
+    try {
+      await preloadCarModel();
+      console.log('[main] GLB model loaded — using 3D model for all karts');
+    } catch (e) {
+      console.warn('[main] GLB model failed to load, using procedural karts:', e);
+    }
+  }
 
   const year = state.session ? (state.session.year || 2026) : 2026;
   state.drivers.forEach(d => {

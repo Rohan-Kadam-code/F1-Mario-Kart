@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { cloneCarModel, isModelLoaded, applyTeamColor } from './CarModelLoader.js';
 
 export class Kart3D {
   constructor(driverInfo, teamColor, scene, year = 2026) {
@@ -64,6 +65,78 @@ export class Kart3D {
 
   _buildKart() {
     const bodyColor = this.teamColorHex;
+
+    // ── Chassis Group (for Lean/Vibration) ──
+    this.chassis = new THREE.Group();
+    this.mesh.add(this.chassis);
+
+    // ── Try GLB model first ──
+    if (isModelLoaded()) {
+      this._useGLB = true;
+      const carClone = cloneCarModel(bodyColor);
+      if (carClone) {
+        this.glbModel = carClone;
+        // Car should be front faced while driving.
+        carClone.rotation.y = 0;
+        this.chassis.add(carClone);
+
+        // Add T-Cam on top of the GLB model
+        const tcamColor = (this.driverNumber % 2 === 1) ? 0xffdd00 : 0x111111;
+        const tcam = new THREE.Mesh(
+          new RoundedBoxGeometry(0.25, 0.15, 0.4, 2, 0.05),
+          new THREE.MeshStandardMaterial({ color: tcamColor, emissive: tcamColor, emissiveIntensity: 0.5 })
+        );
+        tcam.position.set(0, 3.0, -0.5);
+        this.chassis.add(tcam);
+
+        // Rear wing reference for DRS animation
+        this.rearWing = null;
+        this.chassis.traverse(child => {
+          if (child.isMesh) {
+            const name = (child.name || child.material?.name || '').toLowerCase();
+            if (name.includes('rear') && name.includes('wing')) {
+              this.rearWing = child;
+            }
+          }
+        });
+
+        // Create wheels array (find wheel meshes from the GLB)
+        this.wheels = [];
+        this.wheelGroups = [];
+        this.tireTextures = [];
+        this.chassis.traverse(child => {
+          if (child.isMesh) {
+            const name = (child.name || '').toLowerCase();
+            if (name.includes('wheel') || name.includes('tire') || name.includes('tyre')) {
+              this.wheels.push(child);
+            }
+          }
+        });
+
+        // Exhaust (simplified for GLB)
+        this.exhaustLight = new THREE.PointLight(0xff6600, 0, 15);
+        this.exhaustLight.position.set(0, 0.8, -3.5);
+        this.mesh.add(this.exhaustLight);
+        this.exhaustCone = null;
+
+        // Neon Underglow
+        this.underglow = new THREE.PointLight(this.teamColorHex, 0, 8);
+        this.underglow.position.set(0, 0.2, 0);
+        this.mesh.add(this.underglow);
+
+        // Brake light
+        this.brakeLight = new THREE.PointLight(0xff0000, 0, 10);
+        this.brakeLight.position.set(0, 0.7, -3.5);
+        this.mesh.add(this.brakeLight);
+        this.brakeLightMesh = null;
+
+        // Star light
+        return; // Skip procedural geometry
+      }
+    }
+
+    // ── Fallback: Procedural Kart ──
+    this._useGLB = false;
     
     // Premium Material setup
     const bodyMat = new THREE.MeshPhysicalMaterial({ 
@@ -97,11 +170,8 @@ export class Kart3D {
       name: 'teamPaint'
     });
 
-    // ── Chassis Group (for Lean/Vibration) ──
-    this.chassis = new THREE.Group();
-    this.mesh.add(this.chassis);
 
-    // Main Core Chassis (Narrower for Coke-Bottle)
+    // Main Core Chassis (Narrower for Coke-Bottle) — chassis group already created above
     const body = new THREE.Mesh(new RoundedBoxGeometry(1.5, 0.65, 4.0, 3, 0.15), bodyMat);
     body.position.set(0, 0.95, 0.1);
     body.castShadow = true;
@@ -511,42 +581,6 @@ export class Kart3D {
     this.targetPitch = pitch;
   }
 
-  // ── Garage Customization Setters ──
-
-  setTeamColor(hexString) {
-    if (typeof hexString === 'string') {
-      this.teamColor = parseInt(hexString.replace('#', '0x'), 16);
-    } else {
-      this.teamColor = hexString; // Number
-    }
-    
-    // Update materials iteratively if color is changed in garage
-    this.chassis.traverse(child => {
-      if (child.isMesh && child.material && child.material.name === 'teamPaint') {
-        child.material.color.setHex(this.teamColor);
-      }
-    });
-
-    // We also need to label materials so they can be dynamically updated:
-    // This requires a minor refactor in _buildKart to name the materials.
-  }
-
-  setDriverDetails(abbr, num) {
-    this.abbreviation = abbr.substring(0, 3).toUpperCase();
-    if (this.driver) this.driver.driver_number = parseInt(num) || 1;
-    
-    // Rebuild sprites
-    this.mesh.remove(this.nameSprite);
-    if (this.nameSprite.material.map) this.nameSprite.material.map.dispose();
-    this.nameSprite.material.dispose();
-    this._buildNameTag();
-  }
-
-  setTireCompound(compound) {
-    this.tireCompound = compound.toUpperCase();
-    this._updateTireTextures();
-  }
-
   toggleLabels(show) {
     this.labelsVisible = show;
     if (this.nameSprite) this.nameSprite.visible = show;
@@ -641,12 +675,16 @@ export class Kart3D {
     this.chassis.position.y = jitter + bounce;
 
     // 4. Wheel Rotation & Constraints
-    // Normal: Spinning along axle. Abnormal: Y/Z locked to prevent tilt.
     const ws = Math.min(this._smoothSpeed, 400) * 0.005;
     for (const w of this.wheels) {
-      w.rotation.x += ws; // Local spin
-      w.rotation.z = Math.PI / 2; // Locked axle orientation
-      w.rotation.y = 0; // Locked vertical
+      if (this._useGLB) {
+        // GLB wheels dynamically rotate natively around their X axis
+        w.rotateX(-ws); 
+      } else {
+        w.rotation.x -= ws; // Local spin for Procedural
+        w.rotation.z = Math.PI / 2; // Locked axle orientation
+        w.rotation.y = 0; // Locked vertical
+      }
       
       // Dynamic Brake Heat Glow
       if (w.brakeGlow) {

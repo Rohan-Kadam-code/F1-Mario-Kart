@@ -69,11 +69,14 @@ export class LocationCache {
     // Load existing data from IndexedDB
     await this._loadFromStorage();
 
-    // Smart Hydration: If session is already fully cached, skip API calls
+    // Smart Hydration: data already in memory from IndexedDB — compute transform
+    // from stored points (no API calls needed; _fetchCalibrationData checks dData.length > 50).
     if (this.fetchProgress >= 1.0) {
-      console.log(`[LocationCache] Session ${this.sessionKey} fully hydrated from storage. Skipping API fetches.`);
-      this.isCalibrated = true; // Assume high-fidelity data doesn't need re-calibration
-      return; 
+      console.log(`[LocationCache] Session ${this.sessionKey} fully hydrated from storage. Computing transform from cached data.`);
+      await this._fetchCalibrationData(); // uses stored data, no network calls
+      // isCalibrated is set inside _computeTransform; force true if transform was set
+      if (this.transform) this.isCalibrated = true;
+      return;
     }
 
     // Start fetching: first fetch calibration data, then continue in background
@@ -484,6 +487,13 @@ export class LocationCache {
 
       this.fetchedUpTo = chunkEnd;
       this.fetchProgress = (chunkEnd - this.raceStartEpoch) / (this.raceEndEpoch - this.raceStartEpoch || 1);
+
+      // Keep each driver's data sorted for binary search in getDriverPosition
+      for (const dData of this.data.values()) {
+        if (dData.length > 1 && dData[dData.length - 1].epoch < dData[dData.length - 2].epoch) {
+          dData.sort((a, b) => a.epoch - b.epoch);
+        }
+      }
     } catch (e) {
       console.warn('[LocationCache] Chunk fetch error:', e);
       await new Promise(r => setTimeout(r, 5000));
@@ -495,6 +505,17 @@ export class LocationCache {
   /* =============================================
      Position Lookup
      ============================================= */
+
+  /**
+   * Returns true if we have fetched location data covering this epoch.
+   * Used by the render loop to decide whether to use real GPS vs interpolation.
+   */
+  hasDataAt(epochMs) {
+    if (!this.isCalibrated) return false;
+    if (this.fetchProgress <= 0) return false;
+    // We have data from raceStartEpoch up to fetchedUpTo
+    return epochMs >= this.raceStartEpoch && epochMs <= this.fetchedUpTo + 30000; // 30s look-ahead buffer
+  }
 
   /**
    * Get a driver's transformed position at a given epoch time.

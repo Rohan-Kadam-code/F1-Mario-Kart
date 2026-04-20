@@ -223,10 +223,8 @@ export class Track3D {
     }
   }
 
-  /* ── Procedural Terrain (Molded Grass) ── */
+  /* ── Procedural Terrain (Molded Grass Island) ── */
   _buildTerrain(trackPoints, pitLanePoints = []) {
-    // 1. Create a DENSE set of points for the sampler.
-    // If we only use raw points, a vertex might 'fall through the cracks' in long straights.
     const allPoints = [];
     const rawLists = [trackPoints, pitLanePoints];
     
@@ -239,10 +237,8 @@ export class Track3D {
         const p1 = list[i];
         allPoints.push(p1);
         
-        // Line segment interpolation: 
-        // If the gap to the next point is > 5m, add intermediate sampling dots
         const next = list[(i + 1) % list.length];
-        if (i === list.length - 1 && list === pitLanePoints) continue; // Don't loop pit lane
+        if (i === list.length - 1 && list === pitLanePoints) continue;
         
         const dx = next.x - p1.x;
         const dy = next.y - p1.y;
@@ -266,49 +262,46 @@ export class Track3D {
 
     if (allPoints.length === 0) return;
 
-    // Use a high-density plane for the heightmap
+    // High-resolution plane for island cliffs
     const size = 6000;
-    const segs = 400; // 400x400 segments (160,000 vertices) for high-fidelity molding
+    const segs = 400; // 160k vertices for decent cliff resolutions
     const geo = new THREE.PlaneGeometry(size, size, segs, segs);
     geo.rotateX(-Math.PI / 2);
 
     const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
     const v = new THREE.Vector3();
-    const trackP = new THREE.Vector3();
 
-    // 2. Pre-calculate track bounding box with safe margin
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of allPoints) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
     }
-    const margin = 150; // Increased margin for extreme circuit bounds
+    const margin = 150; 
     minX -= margin; maxX += margin; minZ -= margin; maxZ += margin;
+
+    const baseLevel = -50; // Deep cutoff point for floating islands
 
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i);
       
-      // 3. Find nearest track point to determine Y height
       let minDistSq = Infinity;
       let nearestY = null;
 
-      // Only check points if within the track bounding box
+      // Only check points if within bounding box
       if (v.x > minX && v.x < maxX && v.z > minZ && v.z < maxZ) {
-        // VALLEY PRINCIPLE: Within a generous radius (e.g. 100m), the LOWEST elevation wins.
-        // This prevents 'green walls' or ridges from forming between parallel/overlapping tracks.
         for (let j = 0; j < allPoints.length; j += 4) { 
           const pt = allPoints[j];
-          if (pt.isBridge) continue;
+          if (pt.isBridge) continue; // Ignore overhead bridge points for floor contour
 
           const dx = v.x - pt.x;
           const dz = v.z - pt.z;
           const d2 = dx*dx + dz*dz;
           
-          if (d2 < 10000) { // 100m 'Valley' Radius
+          if (d2 < 14400) { // 120m radius Search
               if (nearestY === null || pt.y < nearestY) {
                   nearestY = pt.y || 0;
               }
-              // Still track actual minDist for the 'clearing' logic
               if (d2 < minDistSq) minDistSq = d2;
           } else if (d2 < minDistSq) {
               minDistSq = d2;
@@ -317,93 +310,78 @@ export class Track3D {
         }
       }
 
-      if (nearestY === null) nearestY = 0;
-
       const dist = Math.sqrt(minDistSq);
-      const trackRadius = 40.0; // Prompt Logic: 40m radius terrain depression for underpass
-      const falloff = 100;      // Smoother transition to far hills
       
-      const isBridgeNearby = minDistSq < 6400; // Within 80m of bridge
+      const islandRadius = 70.0;
+      const cliffDrop = 15.0; // Distance over which steep drop occurs
       
-      if (dist < trackRadius) {
-        v.y = nearestY - 3.0; // 3.0m ground duck (combined with 3.0m track lift = 6.0m gap)
-      } else if (dist < trackRadius + falloff) {
-        const t = 1.0 - (dist - trackRadius) / falloff;
-        const smoothT = t * t * (3 - 2 * t);
-        
-        const jitterIntensity = isBridgeNearby ? 0.2 : 4.0;
-        const jitter = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * jitterIntensity * (1.0 - smoothT);
-        v.y = (nearestY - 3.0) * smoothT + jitter;
+      if (nearestY === null) {
+          v.y = baseLevel;
       } else {
-        // Base ground level with rolling noise
-        v.y = -10 + (Math.sin(v.x * 0.02) * Math.sin(v.z * 0.02)) * 12;
+          // Inner island surface
+          if (dist < islandRadius) {
+            // Grass level (+ slight low-poly noise)
+            // Track is generated at +3.0 offset, so grass should sit right below it (2.85)
+            const noise = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * 1.5;
+            v.y = nearestY + 2.85 + noise; 
+          } else if (dist < islandRadius + cliffDrop) {
+            // Cliff face drop
+            const t = (dist - islandRadius) / cliffDrop;
+            const smoothT = Math.pow(t, 0.5); // Curves out over the bottom
+            v.y = THREE.MathUtils.lerp(nearestY + 2.85, baseLevel, smoothT);
+          } else {
+             // Under void (island bottom)
+             v.y = baseLevel;
+          }
       }
       
-      // Prompt Logic: Far-field grass hills MUST be CAPPED at trackY - 4m
-      // This prevents hilly noise from poking through the asphalt.
-      const capY = nearestY - 4.0;
-      if (v.y > capY) v.y = capY;
-
       pos.setXYZ(i, v.x, v.y, v.z);
+
+      // Vertex Colors: Grass vs Sand/Cliff
+      const color = new THREE.Color();
+      // Only vertices that are near the surface level are green, others are sandy cliff
+      if (nearestY !== null && v.y > nearestY && v.y > baseLevel + 1) {
+          color.setHex(0x5ddb3e); // Vibrant green
+      } else {
+          color.setHex(0xe0cda9); // Sand/Rock cliff
+      }
+      colors[i * 3]     = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
     }
 
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
 
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x5ddb3e,   // Vibrant Mario Kart green
-      roughness: 0.7,
+      vertexColors: true,
+      roughness: 0.9,
       metalness: 0.0,
-      flatShading: false,
+      flatShading: true, // LOW-POLY effect
       polygonOffset: true,
       polygonOffsetFactor: 2,
       polygonOffsetUnits: 2
     });
+    
+    // Removed geo.scale(1, 1.5, 1) entirely to preserve true Y coordinates
     
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     this.group.add(mesh);
   }
 
-  /* ── Road Surface (Realistic Grey Asphalt) ── */
+  /* ── Road Surface (Stylized Tarmac) ── */
   _buildRoadSurface(points) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256; canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    
-    // Base Realistic Grey Tarmac
-    ctx.fillStyle = '#515355ff'; 
-    ctx.fillRect(0, 0, 256, 256);
-    
-    // Procedural "Stony" grain
-    for (let i = 0; i < 3000; i++) {
-        const x = Math.random() * 256;
-        const y = Math.random() * 256;
-        const s = Math.random() * 0.2;
-        ctx.fillStyle = `rgba(255,255,255,${s})`;
-        ctx.fillRect(x, y, 1, 1);
-    }
-    
-    // Subtle slab lines
-    ctx.strokeStyle = 'rgba(150, 149, 154, 0.47)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(128, 0); ctx.lineTo(128, 256); ctx.stroke();
-    
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(2, 400); 
-    
     const material = new THREE.MeshStandardMaterial({
-      color: '#888a8d', // Lightened grey
-      map: tex,
+      color: 0x3a3c3d, // Dark flat grey
       roughness: 0.8,
       metalness: 0.1,
-      emissive: 0x444448, // Stronger emissive to maintain grey appearance in chase-cam
-      emissiveIntensity: 0.8,
+      flatShading: true, // Clean look
       side: THREE.DoubleSide
     });
     
     const { geometry } = this._extrudeTrackStrip(points, this.trackWidth, {
-      yOffset: 3.0 // Prompt Logic: Track lift (+3m)
+      yOffset: 3.0 // Restored basic Track lift (+3m)
     });
     
     const mesh = new THREE.Mesh(geometry, material);
@@ -414,7 +392,7 @@ export class Track3D {
     const lineW = 0.5;
     const edgeOuter = this.trackWidth / 2;
     const edgeInner = edgeOuter - lineW;
-    const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 });
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, flatShading: true });
     
     const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 3.01); 
     this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
@@ -423,17 +401,17 @@ export class Track3D {
     this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
-  /* ── 1.5m Wide Ribbon Kerbs (Prompt Logic) ── */
+  /* ── 1.5m Wide Ribbon Kerbs (Flat Shaded) ── */
   _buildKerbs(points) {
     const kerbWidth = 1.5; 
     const innerW = this.trackWidth / 2;
     const outerW = innerW + kerbWidth;
     
-    // Use ribbon geometry for high-fidelity striped kerbs
     const kerbMat = new THREE.MeshStandardMaterial({
         roughness: 0.8,
         metalness: 0.1,
-        vertexColors: true
+        vertexColors: true,
+        flatShading: true
     });
 
     const vertices = [];
@@ -469,17 +447,11 @@ export class Track3D {
         vertices.push(p.x - nx * innerW, (p.y||0) + 3.02, p.z - nz * innerW);
         colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
 
-        // Correct Indexing: Segment N connects to Segment N+1
-        // Each loop pushes 4 vertices: L-Inner, L-Outer, R-Outer, R-Inner
         if (i < points.length - 1) {
             const next_l = l_idx + 4;
             const next_r = r_idx + 4;
-
-            // Left side ribbon (indices: inner, outer, next_inner, next_outer)
             indices.push(l_idx, l_idx+1, next_l);
             indices.push(l_idx+1, next_l+1, next_l);
-
-            // Right side ribbon
             indices.push(r_idx, r_idx+1, next_r);
             indices.push(r_idx+1, next_r+1, next_r);
         }
@@ -492,19 +464,19 @@ export class Track3D {
     this.group.add(new THREE.Mesh(geo, kerbMat));
   }
 
-  /* ── 15m Wide Runoff Area (Prompt Logic) ── */
+  /* ── 15m Wide Runoff Area (Flat shaded, Clean) ── */
   _buildRunoff(points) {
     const runoffWidth = 15.0;
-    const innerW = this.trackWidth / 2 + 1.5; // Outside ribbon kerbs
+    const innerW = this.trackWidth / 2 + 1.5; 
     const outerW = innerW + runoffWidth;
     
-    // Prompt Logic: Run-off sits slightly below track (Y-0.15)
-    const runoffY = 2.85; // 3.0 - 0.15 = 2.85
+    const runoffY = 2.85; 
 
     const mat = new THREE.MeshStandardMaterial({ 
         color: 0x44444a, 
         roughness: 0.9,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        flatShading: true
     });
 
     const lGeo = this._buildEdgeStrip(points, innerW, outerW, runoffY, false);
@@ -514,36 +486,31 @@ export class Track3D {
     this.group.add(new THREE.Mesh(rGeo, mat.clone()));
   }
 
-  /* ── Japan Aesthetics: Sakura & Pom-Pom Trees ── */
+
+  /* ── Aesthetic: Low-Poly Trees ── */
   _buildTrees(trackPoints, pitLanePoints = []) {
     const allPoints = [...trackPoints, ...pitLanePoints];
-    // Find track bounds to scatter trees outside
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of allPoints) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
     }
 
-    const treeCount = 150;
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4d2600 });
-    const sakuraMat = new THREE.MeshStandardMaterial({ 
-        color: 0xffb7c5, 
-        roughness: 0.8,
-        emissive: 0xffb7c5,
-        emissiveIntensity: 0.2 // Soft pink glow
-    }); 
-    const greenMat = new THREE.MeshStandardMaterial({ 
-        color: 0x2d5a27, 
-        roughness: 0.8,
-        emissive: 0x2d5a27,
-        emissiveIntensity: 0.1
-    }); 
+    const treeCount = 600; // Dense forest
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4d2600, flatShading: true });
+    
+    // Various shades of green for depth
+    const greens = [0x2d5a27, 0x3d7a37, 0x1d3a17];
+    const leafMats = greens.map(c => new THREE.MeshStandardMaterial({ 
+        color: c, 
+        roughness: 0.9,
+        flatShading: true
+    }));
 
     for (let i = 0; i < treeCount; i++) {
-        const x = minX - 200 + Math.random() * (maxX - minX + 400);
-        const z = minZ - 200 + Math.random() * (maxZ - minZ + 400);
+        const x = minX - 100 + Math.random() * (maxX - minX + 200);
+        const z = minZ - 100 + Math.random() * (maxZ - minZ + 200);
         
-        // Find distance to nearest track point (Main or Pit)
         let minDistSq = Infinity;
         let nearestY = 0;
         for (let j = 0; j < allPoints.length; j += 10) {
@@ -553,129 +520,105 @@ export class Track3D {
         }
 
         const dist = Math.sqrt(minDistSq);
-        // Prompt Logic: Trees must be 120m+ from track
-        if (dist > 120 && dist < 450) {
+        
+        // Place trees tightly packed on the island but off the track
+        if (dist > 25 && dist < 68) {
             const treeGroup = new THREE.Group();
+            const leafMat = leafMats[Math.floor(Math.random() * leafMats.length)];
             
-            // Randomly choose Sakura or Green
-            const isSakura = Math.random() > 0.4;
-            const leafMat = isSakura ? sakuraMat : greenMat;
+            // Pine tree structure
+            const layers = 2 + Math.floor(Math.random() * 2);
+            for(let l = 0; l < layers; l++) {
+                 const t = new THREE.Mesh(new THREE.ConeGeometry(1.5 - l*0.3, 3 - l*0.5, 5), leafMat);
+                 t.position.y = 2 + l * 1.5;
+                 treeGroup.add(t);
+            }
             
             // Trunk
-            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 4, 8), trunkMat);
-            trunk.position.y = 2;
+            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 2, 5), trunkMat);
+            trunk.position.y = 1;
             treeGroup.add(trunk);
 
-            // Foliage (Refined clusters)
-            const foliageCount = isSakura ? 4 : 3;
-            for (let j = 0; j < foliageCount; j++) {
-                const fSize = isSakura ? (1.2 + Math.random() * 0.8) : (1.5 + Math.random() * 1.0);
-                const foliage = new THREE.Mesh(new THREE.SphereGeometry(fSize, 8, 8), leafMat);
-                
-                // Randomly offset around the top of the trunk
-                const angle = (j / foliageCount) * Math.PI * 2;
-                const radius = isSakura ? 1.5 : 1.0;
-                foliage.position.set(
-                    Math.cos(angle) * radius,
-                    4 + Math.random() * 2,
-                    Math.sin(angle) * radius
-                );
-                treeGroup.add(foliage);
-            }
-
-            // Sync tree Y with the new 6m gap terrain molding
-            let terrainY = -10 + (Math.sin(x * 0.02) * Math.sin(z * 0.02)) * 12;
-            const trackRadius = 40.0;
-            const falloff = 100;
-            if (dist < trackRadius) {
-                terrainY = nearestY - 3.0; // Matches -3.0 terrain duck
-            } else if (dist < trackRadius + falloff) {
-                const t = 1.0 - (dist - trackRadius) / falloff;
-                const smoothT = t * t * (3 - 2 * t);
-                const jitter = (Math.sin(x * 0.1) * Math.cos(z * 0.1)) * 4.0 * (1.0 - smoothT);
-                terrainY = (nearestY - 3.0) * smoothT + jitter;
-            }
+            // Calculate exact terrain height
+            const noise = (Math.sin(x * 0.1) * Math.cos(z * 0.1)) * 1.5;
+            let terrainY = nearestY + 2.85 + noise; 
             
-            // Apply hill capping to trees as well
-            if (terrainY > nearestY - 4.0) terrainY = nearestY - 4.0;
-
             treeGroup.position.set(x, terrainY, z);
-            if (terrainY < -25) treeGroup.position.y = -25; // Deeper floor limit for 6m gap
-            
-            treeGroup.scale.setScalar(0.8 + Math.random() * 1.5);
+            treeGroup.scale.setScalar(0.8 + Math.random() * 1.2);
             treeGroup.rotation.y = Math.random() * Math.PI;
             this.group.add(treeGroup);
         }
     }
   }
 
-  /* ── Japan Aesthetics: Castle & Torii Gate ── */
+  /* ── Island Props: Ferris Wheel, Balloons, Tents ── */
   _buildJapanProps(points) {
-    // 1. Japanese Castle Keep (Background)
-    const castle = new THREE.Group();
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x2c3e50 }); // Dark blue/grey roof
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xecf0f1 }); // White walls
-    
-    // Base tier
-    const base = new THREE.Mesh(new THREE.BoxGeometry(20, 15, 20), wallMat);
-    base.position.y = 7.5;
-    castle.add(base);
-    
-    // Roof 1
-    const roof1 = new THREE.Mesh(new THREE.ConeGeometry(18, 8, 4), roofMat);
-    roof1.position.y = 15;
-    roof1.rotation.y = Math.PI/4;
-    castle.add(roof1);
-    
-    // Tier 2
-    const tier2 = new THREE.Mesh(new THREE.BoxGeometry(12, 10, 12), wallMat);
-    tier2.position.y = 20;
-    castle.add(tier2);
+    // We repurpose the Japan Props function to build the generic Island Amusement Props
 
-    // Roof 2
-    const roof2 = new THREE.Mesh(new THREE.ConeGeometry(10, 6, 4), roofMat);
-    roof2.position.y = 26;
-    roof2.rotation.y = Math.PI/4;
-    castle.add(roof2);
+    // 1. Hot Air Balloons
+    const balloonMat = new THREE.MeshStandardMaterial({ color: 0xff3366, flatShading: true });
+    const balloonGeo = new THREE.SphereGeometry(6, 8, 8); // Low poly
+    const basketGeo = new THREE.BoxGeometry(2, 2, 2);
+    const basketMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, flatShading: true });
+    
+    const balloonColors = [0xff3366, 0x33ccff, 0xffcc00, 0x66ff66];
 
-    castle.position.set(250, 60, -200); // Further back
-    castle.scale.setScalar(3.5); // Slightly smaller
-    this.group.add(castle);
+    for(let i=0; i<5; i++) {
+        const bg = new THREE.Group();
+        const bm = new THREE.Mesh(balloonGeo, new THREE.MeshStandardMaterial({ color: balloonColors[i%4], flatShading: true }));
+        bg.add(bm);
+        const bk = new THREE.Mesh(basketGeo, basketMat);
+        bk.position.y = -8;
+        bg.add(bk);
+        
+        bg.position.set(
+            points[0].x - 300 + Math.random() * 600,
+            80 + Math.random() * 60, // Very high in the sky
+            points[0].z - 300 + Math.random() * 600
+        );
+        this.group.add(bg);
+    }
 
-    // 2. Torii Gate (Finish Line Area)
-    const p0 = points[0];
-    const p1 = points[1];
-    const angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+    // 2. Ferris Wheel
+    const wheelGroup = new THREE.Group();
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.5, flatShading: true });
     
-    const torii = new THREE.Group();
-    const toriiMat = new THREE.MeshStandardMaterial({ 
-        color: 0xe74c3c, 
-        roughness: 0.3,
-        emissive: 0x330000, // Very subtle dark red glow for depth
-        emissiveIntensity: 1.0
-    });
+    // Stands
+    const leftStand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 2, 40, 4), ironMat);
+    leftStand.position.set(-6, 20, 0); leftStand.rotation.z = -0.2;
+    wheelGroup.add(leftStand);
+    const rightStand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 2, 40, 4), ironMat);
+    rightStand.position.set(6, 20, 0); rightStand.rotation.z = 0.2;
+    wheelGroup.add(rightStand);
     
-    // Pillars (Slightly shorter and thinner)
-    const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
-    lp.position.set(this.trackWidth/2 + 1.5, 6 + 1.5, 0);
-    torii.add(lp);
+    // Main Wheel
+    const wheel = new THREE.Group();
+    const wRim = new THREE.Mesh(new THREE.TorusGeometry(20, 0.5, 8, 16), ironMat);
+    wheel.add(wRim);
     
-    const rp = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 12, 8), toriiMat);
-    rp.position.set(-(this.trackWidth/2 + 1.5), 6 + 1.5, 0);
-    torii.add(rp);
-    
-    // Top Beam
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 6, 1.2, 1.5), toriiMat);
-    beam.position.y = 11 + 1.5;
-    torii.add(beam);
-    
-    const beamTop = new THREE.Mesh(new THREE.BoxGeometry(this.trackWidth + 10, 1.0, 2.0), toriiMat);
-    beamTop.position.y = 12.5 + 1.5;
-    torii.add(beamTop);
+    // Spokes and Cars
+    for(let i=0; i<12; i++) {
+        const angle = (i/12) * Math.PI * 2;
+        const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 40, 4), ironMat);
+        spoke.rotation.x = Math.PI/2;
+        spoke.rotation.z = angle;
+        wheel.add(spoke);
 
-    torii.position.set(p0.x, p0.y, p0.z);
-    torii.rotation.y = angle;
-    this.group.add(torii);
+        // Car
+        const car = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 3), new THREE.MeshStandardMaterial({ color: balloonColors[i%4], flatShading: true }));
+        car.position.set(Math.cos(angle)*20, Math.sin(angle)*20, 0);
+        wheel.add(car);
+    }
+    wheel.position.y = 40;
+    wheelGroup.add(wheel);
+
+    // Place Ferris wheel on a safe grass spot
+    const pFar = points[Math.floor(points.length * 0.4)];
+    if(pFar) {
+         wheelGroup.position.set(pFar.x + 80, (pFar.y || 0) + 2.85, pFar.z - 80);
+         wheelGroup.rotation.y = Math.PI/4;
+         this.group.add(wheelGroup);
+    }
   }
 
   /* ── Question Blocks (Rotating) ── */
