@@ -13,8 +13,8 @@ export class Track3D {
     scene.add(this.group);
 
     // Track metadata
-    this.trackWidth = 14;
-    this.pitLaneWidth = 10;
+    this.trackWidth = 20; // Increased from 14
+    this.pitLaneWidth = 14; // Increased from 10
     this.circuitData = null;
     this.drsZones = [];
     this.sectorIndices = [];
@@ -34,8 +34,8 @@ export class Track3D {
 
     this.circuitData = circuitData;
     if (circuitData && circuitData.trackWidthM) {
-      this.trackWidth = Math.max(8, circuitData.trackWidthM * 0.8);
-      this.pitLaneWidth = Math.max(6, (circuitData.pitLaneWidthM || 10) * 0.7);
+      this.trackWidth = Math.max(12, circuitData.trackWidthM * 1.1);
+      this.pitLaneWidth = Math.max(8, (circuitData.pitLaneWidthM || 10) * 1.0);
       this.drsZones = circuitData.drsZones || [];
       this.sectorIndices = (circuitData.sectors || []).map(
         frac => Math.floor(frac * trackPoints.length)
@@ -59,13 +59,15 @@ export class Track3D {
     this._buildRoadSurface(trackPoints);
     this._buildKerbs(trackPoints);
     this._buildRunoff(trackPoints);
-    this._buildFinishLine(trackPoints);
+    const startIndex = this.circuitData?.startFinishIndex || 0;
+    this._buildFinishLine(trackPoints, startIndex);
     this._buildTrees(trackPoints, pitLanePoints);
     this._buildJapanProps(trackPoints);
     this._buildQuestionBlocks(trackPoints);
     this._buildCenterLine(trackPoints);
-    this._buildDRSZones(trackPoints);
     this._buildSectionMarkers(trackPoints);
+    this._buildGridMarkers(trackPoints, startIndex);
+    this._buildMarshalPanels(trackPoints);
     this._buildBridgeStructure(trackPoints);
 
     if (pitLanePoints.length > 2) {
@@ -75,7 +77,7 @@ export class Track3D {
 
     if (circuitData) {
       this._buildCircuitNameLabel(circuitData);
-      this._buildEnvironment(trackPoints);
+      // this._buildEnvironment(trackPoints);
       this._buildLandmarks(trackPoints);
     }
   }
@@ -310,7 +312,7 @@ export class Track3D {
         }
       }
 
-      const dist = Math.sqrt(minDistSq);
+      const surfaceDist = Math.sqrt(minDistSq);
       
       const islandRadius = 70.0;
       const cliffDrop = 15.0; // Distance over which steep drop occurs
@@ -319,16 +321,24 @@ export class Track3D {
           v.y = baseLevel;
       } else {
           // Inner island surface
-          if (dist < islandRadius) {
+          if (surfaceDist < islandRadius) {
             // Grass level (+ slight low-poly noise)
-            // Track is generated at +3.0 offset, so grass should sit right below it (2.85)
-            const noise = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * 1.5;
-            v.y = nearestY + 2.85 + noise; 
-          } else if (dist < islandRadius + cliffDrop) {
+            let noise = (Math.sin(v.x * 0.1) * Math.cos(v.z * 0.1)) * 1.5;
+            
+            // Damping: Reduce noise when close to track to prevent clipping through the road
+            const trackClearance = this.trackWidth / 2 + 5; 
+            if (surfaceDist < trackClearance) {
+              const factor = Math.max(0, (surfaceDist - (this.trackWidth / 2)) / 5);
+              noise *= factor;
+            }
+
+            // Lowered from 2.85 to 1.5 to provide more clearance for the flat track at Y=5.0
+            v.y = nearestY + 1.5 + noise; 
+          } else if (surfaceDist < islandRadius + cliffDrop) {
             // Cliff face drop
-            const t = (dist - islandRadius) / cliffDrop;
+            const t = (surfaceDist - islandRadius) / cliffDrop;
             const smoothT = Math.pow(t, 0.5); // Curves out over the bottom
-            v.y = THREE.MathUtils.lerp(nearestY + 2.85, baseLevel, smoothT);
+            v.y = THREE.MathUtils.lerp(nearestY + 1.5, baseLevel, smoothT);
           } else {
              // Under void (island bottom)
              v.y = baseLevel;
@@ -337,11 +347,16 @@ export class Track3D {
       
       pos.setXYZ(i, v.x, v.y, v.z);
 
-      // Vertex Colors: Grass vs Sand/Cliff
+      // Vertex Colors: Gravel vs Grass vs Sand/Cliff
       const color = new THREE.Color();
-      // Only vertices that are near the surface level are green, others are sandy cliff
-      if (nearestY !== null && v.y > nearestY && v.y > baseLevel + 1) {
-          color.setHex(0x5ddb3e); // Vibrant green
+      // Use the distance calculated above to decide between gravel and grass
+      
+      if (nearestY !== null && v.y > baseLevel + 1) {
+          if (surfaceDist < this.trackWidth / 2 + 12) {
+              color.setHex(0x999999); // Gravel grey runoff
+          } else {
+              color.setHex(0x5ddb3e); // Vibrant green grass
+          }
       } else {
           color.setHex(0xe0cda9); // Sand/Rock cliff
       }
@@ -373,15 +388,19 @@ export class Track3D {
   /* ── Road Surface (Stylized Tarmac) ── */
   _buildRoadSurface(points) {
     const material = new THREE.MeshStandardMaterial({
-      color: 0x3a3c3d, // Dark flat grey
+      color: 0x3a3c3d,
       roughness: 0.8,
       metalness: 0.1,
-      flatShading: true, // Clean look
-      side: THREE.DoubleSide
+      flatShading: true,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4
     });
+
     
     const { geometry } = this._extrudeTrackStrip(points, this.trackWidth, {
-      yOffset: 3.0 // Restored basic Track lift (+3m)
+      yOffset: 5.0 // Increased to 5.0m to clear all terrain noise reliably
     });
     
     const mesh = new THREE.Mesh(geometry, material);
@@ -394,17 +413,17 @@ export class Track3D {
     const edgeInner = edgeOuter - lineW;
     const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, flatShading: true });
     
-    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 3.01); 
+    const leftLineGeo = this._buildEdgeStrip(points, edgeInner, edgeOuter, 5.01); 
     this.group.add(new THREE.Mesh(leftLineGeo, lineMat));
     
-    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 3.01); 
+    const rightLineGeo = this._buildEdgeStrip(points, -edgeOuter, -edgeInner, 5.01); 
     this.group.add(new THREE.Mesh(rightLineGeo, lineMat.clone()));
   }
 
   /* ── 1.5m Wide Ribbon Kerbs (Flat Shaded) ── */
   _buildKerbs(points) {
     const kerbWidth = 1.5; 
-    const innerW = this.trackWidth / 2;
+    const innerW = this.trackWidth / 2 - 0.2; // Slight overlap to prevent gaps
     const outerW = innerW + kerbWidth;
     
     const kerbMat = new THREE.MeshStandardMaterial({
@@ -435,16 +454,16 @@ export class Track3D {
         // Stripe color
         const color = (Math.floor(i / 3) % 2 === 0) ? colorRed : colorWhite;
 
-        // Left Kerb
+        // Left Kerb (Raised to 5.05 to sit clearly on top of the 5.0m road)
         const l_idx = vertices.length / 3;
-        vertices.push(p.x + nx * innerW, (p.y||0) + 3.02, p.z + nz * innerW);
-        vertices.push(p.x + nx * outerW, (p.y||0) + 3.02, p.z + nz * outerW);
+        vertices.push(p.x + nx * innerW, (p.y||0) + 5.05, p.z + nz * innerW);
+        vertices.push(p.x + nx * outerW, (p.y||0) + 5.05, p.z + nz * outerW);
         colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
 
         // Right Kerb
         const r_idx = vertices.length / 3;
-        vertices.push(p.x - nx * outerW, (p.y||0) + 3.02, p.z - nz * outerW);
-        vertices.push(p.x - nx * innerW, (p.y||0) + 3.02, p.z - nz * innerW);
+        vertices.push(p.x - nx * outerW, (p.y||0) + 5.05, p.z - nz * outerW);
+        vertices.push(p.x - nx * innerW, (p.y||0) + 5.05, p.z - nz * innerW);
         colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
 
         if (i < points.length - 1) {
@@ -466,15 +485,15 @@ export class Track3D {
 
   /* ── 15m Wide Runoff Area (Flat shaded, Clean) ── */
   _buildRunoff(points) {
-    const runoffWidth = 15.0;
-    const innerW = this.trackWidth / 2 + 1.5; 
+    const runoffWidth = 8.0;
+    const innerW = this.trackWidth / 2 + 1.3; 
     const outerW = innerW + runoffWidth;
     
-    const runoffY = 2.85; 
+    const runoffY = 4.98; // Slightly BELOW road (5.0) to prevent overlapping
 
     const mat = new THREE.MeshStandardMaterial({ 
-        color: 0x44444a, 
-        roughness: 0.9,
+        color: 0xc2b280, // Sand/Gravel beige
+        roughness: 1.0,
         side: THREE.DoubleSide,
         flatShading: true
     });
@@ -513,7 +532,8 @@ export class Track3D {
         
         let minDistSq = Infinity;
         let nearestY = 0;
-        for (let j = 0; j < allPoints.length; j += 10) {
+        // Use every point for maximum accuracy in elevation mapping
+        for (let j = 0; j < allPoints.length; j++) {
             const pt = allPoints[j];
             const d2 = (x - pt.x)**2 + (z - pt.z)**2;
             if (d2 < minDistSq) { minDistSq = d2; nearestY = pt.y || 0; }
@@ -612,12 +632,12 @@ export class Track3D {
     wheel.position.y = 40;
     wheelGroup.add(wheel);
 
-    // Place Ferris wheel on a safe grass spot
+    // Place Ferris wheel far enough from the road to prevent clipping (120m offset)
     const pFar = points[Math.floor(points.length * 0.4)];
     if(pFar) {
-         wheelGroup.position.set(pFar.x + 80, (pFar.y || 0) + 2.85, pFar.z - 80);
-         wheelGroup.rotation.y = Math.PI/4;
-         this.group.add(wheelGroup);
+        wheelGroup.position.set(pFar.x + 140, pFar.y, pFar.z + 140);
+        wheelGroup.rotation.y = Math.PI/4;
+        this.group.add(wheelGroup);
     }
   }
 
@@ -633,7 +653,7 @@ export class Track3D {
     for (const idx of indices) {
         const p = points[idx];
         const block = new THREE.Mesh(blockGeo, blockMat);
-        block.position.set(p.x, (p.y||0) + 1.5 + 8, p.z);
+        block.position.set(p.x, (p.y||0) + 5.0 + 8, p.z);
         this.group.add(block);
         this.questionBlocks.push(block);
     }
@@ -663,7 +683,7 @@ export class Track3D {
         if (segPoints.length < 2) continue;
         
         const { geometry } = this._extrudeTrackStrip(segPoints, 0.6, { 
-            yOffset: 1.53, // Above main road (1.5)
+            yOffset: 5.03, // Above main road (5.0)
             closeLoop: false 
         });
         
@@ -673,10 +693,10 @@ export class Track3D {
   }
 
   /* ── Finish Line ── */
-  _buildFinishLine(points) {
+  _buildFinishLine(points, startIndex = 0) {
     if (points.length < 2) return;
-    const p0 = points[0];
-    const p1 = points[1];
+    const p0 = points[startIndex % points.length];
+    const p1 = points[(startIndex + 1) % points.length];
     const angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
     
     // Calculate pitch for the start line
@@ -691,7 +711,7 @@ export class Track3D {
     const rows = 3;
 
     const checkerGroup = new THREE.Group();
-    checkerGroup.position.set(p0.x, p0.y + 0.25, p0.z); // Layer 5
+    checkerGroup.position.set(p0.x, p0.y + 5.01, p0.z); // Slightly above road (5.0)
     checkerGroup.rotation.y = angle;
     checkerGroup.rotation.x = -pitch;
 
@@ -790,10 +810,6 @@ export class Track3D {
         this.startLights.push({ top: ledTop, bottom: ledBottom });
     }
 
-    // Process Grid Markers
-    this._buildGridMarkers(points, angle);
-    // Process Marshal Panels
-    this._buildMarshalPanels(points);
   }
 
   /**
@@ -836,7 +852,7 @@ export class Track3D {
       if (drsPoints.length < 2) continue;
 
       const { geometry: drsGeo } = this._extrudeTrackStrip(drsPoints, this.trackWidth - 0.5, {
-        yOffset: 1.55, // Layer 2
+        yOffset: 5.05, // Layer 2 (Above road 5.0)
         closeLoop: false 
       });
 
@@ -866,7 +882,7 @@ export class Track3D {
 
       // Glowing Ground Strip
       const { geometry: stripGeo } = this._extrudeTrackStrip([points[idx], points[(idx+1)%points.length]], this.trackWidth, { 
-        yOffset: 1.54, // Layer 4
+        yOffset: 5.04, // Layer 4 (Above road 5.0)
         closeLoop: false 
       });
       const stripMat = new THREE.MeshStandardMaterial({ 
@@ -912,7 +928,7 @@ export class Track3D {
       color: 0x33333a,
       roughness: 0.7,
       metalness: 0.05,
-      yOffset: 1.5, // Match main road (1.5)
+      yOffset: 5.0, // Match main road (5.0)
       closeLoop: false
     });
     const mesh = new THREE.Mesh(geometry, material);
@@ -920,11 +936,11 @@ export class Track3D {
     this.group.add(mesh);
 
     // Pit lane edge
-    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 1.51, false);
+    const edgeGeo = this._buildEdgeStrip(points, this.pitLaneWidth / 2, this.pitLaneWidth / 2 + 1, 5.01, false);
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0x444450 });
     this.group.add(new THREE.Mesh(edgeGeo, edgeMat));
 
-    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 1.51, false);
+    const edgeGeo2 = this._buildEdgeStrip(points, -this.pitLaneWidth / 2 - 1, -this.pitLaneWidth / 2, 5.01, false);
     this.group.add(new THREE.Mesh(edgeGeo2, edgeMat.clone()));
   }
 
@@ -1172,11 +1188,11 @@ export class Track3D {
    * points[0] = start/finish, points[N-1] = last point before the line.
    * "Backward" means: 0 → N-1 → N-2 → ... (against racing direction).
    */
-  _walkBackFromStart(points, distance) {
+  _walkBackFromStart(points, distance, startIndex = 0) {
     let remaining = distance;
     for (let step = 0; step < points.length; step++) {
-      const fromIdx = (points.length - step) % points.length;   // 0, N-1, N-2, ...
-      const toIdx   = (points.length - step - 1) % points.length; // N-1, N-2, N-3, ...
+      const fromIdx = (startIndex - step + points.length) % points.length;   
+      const toIdx   = (startIndex - step - 1 + points.length) % points.length; 
 
       const dx = points[toIdx].x - points[fromIdx].x;
       const dz = points[toIdx].z - points[fromIdx].z;
@@ -1209,7 +1225,7 @@ export class Track3D {
    * Build staggered grid numbers 1-20 on the track surface.
    * Walks backward along the actual track path so markers follow the curve.
    */
-  _buildGridMarkers(points, angle) {
+  _buildGridMarkers(points, startIndex = 0) {
     if (points.length < 3) return;
 
     const isPoleRight = !this.circuitData || (this.circuitData.poleSide !== 'left');
@@ -1218,8 +1234,10 @@ export class Track3D {
     const gridSpacing = 8; // meters between grid rows
 
     for (let i = 0; i < 20; i++) {
-      const distance = 2 + i * gridSpacing;
-      const pos = this._walkBackFromStart(points, distance);
+      const distance = 24 + i * gridSpacing; // Match SceneManager offset
+      const pos = this._walkBackFromStart(points, distance, startIndex);
+      if (!pos) continue; // Skip if we can't find a position (e.g. track too short)
+
       const isRightSlot = (i % 2 === 0) ? isPoleRight : !isPoleRight;
 
       // Lateral offset using the local track angle at this point
@@ -1244,7 +1262,7 @@ export class Track3D {
       const geo = new THREE.PlaneGeometry(markerSize, markerSize);
       const marker = new THREE.Mesh(geo, mat);
 
-      marker.position.set(x, pos.y + 0.15, z);
+      marker.position.set(x, pos.y + 5.08, z);
       
       // We apply pitch then yaw. 
       marker.rotation.order = 'YXZ';
@@ -1258,7 +1276,7 @@ export class Track3D {
       const boxGeo = new THREE.PlaneGeometry(markerSize * 1.6, 0.2);
       const boxMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
       const box = new THREE.Mesh(boxGeo, boxMat);
-      box.position.set(x - fwdX * 0.8, pos.y + 0.14, z - fwdZ * 0.8);
+      box.position.set(x - fwdX * 0.8, pos.y + 5.14, z - fwdZ * 0.8);
       box.rotation.order = 'YXZ';
       box.rotation.y = -pos.angle;
       box.rotation.x = -Math.PI / 2 - pos.pitch;
@@ -1298,7 +1316,7 @@ export class Track3D {
         
         const panel = new THREE.Mesh(panelGeo, panelMat);
         // Place on the left (pit wall)
-        panel.position.set(p.x + Math.cos(ang) * (this.trackWidth/2 + 1), (p.y||0) + 1.5, p.z - Math.sin(ang) * (this.trackWidth/2 + 1));
+        panel.position.set(p.x + Math.cos(ang) * (this.trackWidth/2 + 1), (p.y||0) + 5.0, p.z - Math.sin(ang) * (this.trackWidth/2 + 1));
         panel.rotation.y = ang;
         this.group.add(panel);
         
@@ -1431,7 +1449,7 @@ export class Track3D {
         
         const mesh = new THREE.Mesh(geo, buildingMat);
         const elev = this._getElevationAtWorld(avgX, avgZ);
-        mesh.position.y = elev + 1.5; // Match elevated track level
+        mesh.position.y = elev + 5.0; // Match elevated track level
         this.group.add(mesh);
 
         // Add a "Roof" (top face)

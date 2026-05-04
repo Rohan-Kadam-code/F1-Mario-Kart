@@ -524,28 +524,18 @@ export class SceneManager {
     const cy = (minY + maxY) / 2;
 
     this.trackPoints3D = trackPoints.map((p, i) => {
-      const fraction = this.nodeFractions[i];
-      let elevatedY = 0;
-      if (circuitData && circuitData.elevationProfile) {
-        elevatedY = this._interpolateElevation(fraction, circuitData.elevationProfile);
-      }
       return {
         x: (p.x - cx) * scale,
-        y: elevatedY,
+        y: 0, // Keep base at 0 for terrain consistency
         z: -(p.y - cy) * scale,
       };
     });
 
-    this.pitLanePoints3D = pitLanePoints.map((p, i) => {
-      // Pit lane elevation matching start/finish
-      let elevatedY = 0;
-      if (circuitData && circuitData.elevationProfile) elevatedY = circuitData.elevationProfile[0].elevation;
-      return {
-        x: (p.x - cx) * scale,
-        y: elevatedY,
-        z: -(p.y - cy) * scale,
-      };
-    });
+    this.pitLanePoints3D = pitLanePoints.map((p) => ({
+      x: (p.x - cx) * scale,
+      y: 0,
+      z: -(p.y - cy) * scale,
+    }));
 
     if (this.track3D) {
       this.track3D.build(this.trackPoints3D, this.pitLanePoints3D, circuitData, {
@@ -678,99 +668,50 @@ export class SceneManager {
    * Used by main.js to position karts from LocationCache data.
    */
   toWorldCoords(rawX, rawY, currentY = undefined, expectedProgress = undefined) {
-    if (!this._trackScale) return { x: 0, y: 0, z: 0, pitch: 0 };
+    if (!this._trackScale) return { x: 0, y: 0, z: 0, pitch: 0, trackAngle: 0 };
     const wx = (rawX - this._trackCenterX) * this._trackScale;
     const wz = -(rawY - this._trackCenterY) * this._trackScale;
-    
-    // Dynamically find elevation and pitch for karts at this (X, Z)
-    let groundY = 0;
-    let pitch = 0;
 
+    // Flat track: no elevation lookup needed
+    const VISUAL_OFFSET = 5.15; // Raised slightly from 5.0 to clear asphalt
+
+    // Find nearest track point for heading angle only (XZ, no Y)
+    let trackAngle = 0;
     if (this.trackPoints3D && this.trackPoints3D.length > 2) {
       const totalPoints = this.trackPoints3D.length;
       let minDistSq = Infinity;
       let nearestIdx = -1;
 
-      // Chronological search constraint: If we know roughly where the car is in the lap (progress 0..1),
-      // we heavily restrict the spatial search window to +/- 10% of the lap around that progress point.
-      // This mathematically completely eliminates overlapping track ambiguity (bridges/intersections).
       let searchStart = 0;
       let searchEnd = totalPoints;
-      
       if (expectedProgress !== undefined) {
-         const expectedIdx = Math.round(expectedProgress * totalPoints);
-         const searchWindow = Math.max(100, Math.round(totalPoints * 0.1)); // 10% map tolerance
-         searchStart = expectedIdx - searchWindow;
-         searchEnd = expectedIdx + searchWindow;
+        const expectedIdx = Math.round(expectedProgress * totalPoints);
+        const searchWindow = Math.max(100, Math.round(totalPoints * 0.1));
+        searchStart = expectedIdx - searchWindow;
+        searchEnd = expectedIdx + searchWindow;
       }
 
-      // Optimised search: check points for nearest track node
-      // Use i += 2 for higher resolution near inclines
       for (let i = searchStart; i <= searchEnd; i += 2) {
-        // Wrap gracefully, since the topological F1 track is a loop
-        const safeIdx = (i + totalPoints * 10) % totalPoints; 
+        const safeIdx = (i + totalPoints * 10) % totalPoints;
         const pt = this.trackPoints3D[safeIdx];
-        
-        let d2 = (wx - pt.x)**2 + (wz - pt.z)**2;
-        // True 3D Euclidean Search with strong vertical bias.
-        // If we know the kart's current height, we penalize nodes on different vertical layers
-        // (like the underpass beneath the ramp) to completely eliminate ambiguous snapping.
-        if (currentY !== undefined) {
-           const dy = pt.y - currentY;
-           d2 += (dy * dy) * 5.0; // Heavy Y-axis weight forces vertical continuity
-        }
-
-        if (d2 < minDistSq) {
-          minDistSq = d2;
-          nearestIdx = safeIdx;
-        }
+        const d2 = (wx - pt.x) ** 2 + (wz - pt.z) ** 2;
+        if (d2 < minDistSq) { minDistSq = d2; nearestIdx = safeIdx; }
       }
 
       if (nearestIdx !== -1) {
-        let p1 = this.trackPoints3D[nearestIdx];
-        const prev = this.trackPoints3D[(nearestIdx - 1 + this.trackPoints3D.length) % this.trackPoints3D.length];
-        const next = this.trackPoints3D[(nearestIdx + 1) % this.trackPoints3D.length];
-        
-        // Find if the car is "ahead" or "behind" p1 to pick the correct segment
-        let p2 = next;
-        const v1x = next.x - p1.x; const v1z = next.z - p1.z;
-        const kx = wx - p1.x; const kz = wz - p1.z;
-        const dotNext = kx * v1x + kz * v1z;
-        
-        if (dotNext < 0) {
-            p2 = p1;
-            p1 = prev;
-        }
-
-        // Project kart exact position onto the line segment to find precise percentage 't'
-        const dx = p2.x - p1.x;
-        const dz = p2.z - p1.z;
-        const lenSq = dx*dx + dz*dz;
-        let t = 0;
-        if (lenSq > 0.001) {
-             t = ((wx - p1.x)*dx + (wz - p1.z)*dz) / lenSq;
-             t = Math.max(0, Math.min(1, t)); // clamp
-        }
-        
-        // Perfect smooth sliding elevation (zero jumps)
-        groundY = p1.y + (p2.y - p1.y) * t;
-
-        // Perfect Segment Pitch
-        const dxz = Math.sqrt(lenSq);
-        const dy = p2.y - p1.y;
-        if (dxz > 0.1) {
-          pitch = Math.atan2(dy, dxz);
-        }
+        const nextIdx = (nearestIdx + 1) % totalPoints;
+        const prevIdx = (nearestIdx - 1 + totalPoints) % totalPoints;
+        const fwd = this.trackPoints3D[nextIdx];
+        const bck = this.trackPoints3D[prevIdx];
+        trackAngle = Math.atan2(fwd.x - bck.x, fwd.z - bck.z);
       }
     }
 
-    // Sync with Track3D visual offset (+3.0m) to ensure karts sit on the surface.
-    // This combined with a -3.0m terrain duck creates the 6m separation.
-    const VISUAL_OFFSET = 3.0;
-    return { x: wx, y: groundY + VISUAL_OFFSET, z: wz, pitch: pitch };
+    return { x: wx, y: VISUAL_OFFSET, z: wz, pitch: 0, trackAngle };
   }
 
   /**
+
    * Get world position for a track progress value (0..1).
    * Linearly interpolates along the 3D track centerline.
    */
@@ -799,8 +740,68 @@ export class SceneManager {
     const lenXZ = Math.sqrt(dx*dx + dz*dz) || 1;
     const pitch = Math.atan2(dy, lenXZ);
 
-    return { x, y, z, angle, pitch };
+    return { x, y: y + 5.15, z, angle, pitch };
   }
+
+  /**
+   * Get the world position for a specific grid slot (1-20).
+   * Used for aligning karts at the race start.
+   */
+  getGridPosition(gridSlot) {
+    if (!this.trackPoints3D || this.trackPoints3D.length < 3) return null;
+    
+    const startIndex = this.circuitData?.startFinishIndex || 0;
+    const gridSpacing = 8;
+    // Increased initial offset to 24m to better match real-world GPS start positions
+    const distance = 24 + (gridSlot - 1) * gridSpacing;
+    const poleSide = this.circuitData?.poleSide || 'left';
+    const lateralShift = 4.0;
+    
+    const pos = this._walkBack(this.trackPoints3D, distance, startIndex);
+    if (!pos) return null;
+
+    const isPoleRight = (poleSide !== 'left');
+    const isRightSlot = (gridSlot % 2 !== 0) ? isPoleRight : !isPoleRight;
+    
+    const rightX = Math.cos(pos.angle);
+    const rightZ = -Math.sin(pos.angle);
+    
+    return {
+      x: pos.x + rightX * (isRightSlot ? lateralShift : -lateralShift),
+      y: 5.15, // Lifted above road (5.0) to prevent clipping
+      z: pos.z + rightZ * (isRightSlot ? lateralShift : -lateralShift),
+      angle: pos.angle,
+      pitch: pos.pitch
+    };
+  }
+
+  _walkBack(points, distance, startIndex) {
+    let remaining = distance;
+    for (let step = 0; step < points.length; step++) {
+      const fromIdx = (startIndex - step + points.length) % points.length;   
+      const toIdx   = (startIndex - step - 1 + points.length) % points.length; 
+
+      const dx = points[toIdx].x - points[fromIdx].x;
+      const dz = points[toIdx].z - points[fromIdx].z;
+      const segLen = Math.sqrt(dx * dx + dz * dz);
+
+      if (remaining <= segLen && segLen > 0) {
+        const t = remaining / segLen;
+        const fwdAngle = Math.atan2(points[fromIdx].x - points[toIdx].x, points[fromIdx].z - points[toIdx].z);
+        const yDist = points[fromIdx].y - points[toIdx].y;
+        return {
+          x: points[fromIdx].x + dx * t,
+          y: points[fromIdx].y + (points[toIdx].y - points[fromIdx].y) * t,
+          z: points[fromIdx].z + dz * t,
+          angle: fwdAngle,
+          pitch: Math.atan2(yDist, segLen)
+        };
+      }
+      remaining -= segLen;
+    }
+    return null;
+  }
+
 
   /* =========================================
      Resize

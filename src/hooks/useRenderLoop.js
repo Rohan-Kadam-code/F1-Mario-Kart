@@ -97,131 +97,98 @@ export function useRenderLoop(sceneRefs) {
         }
       }
 
-      // Move karts
+      // ── Move Karts ──────────────────────────────────────────────────
       if (posSnapshot.size > 0 && !scn.garageMode) {
         const currentEpoch = sess.raceStartTime + t;
         const cache = sess.locationCache;
-        const useRealPos = cache?.isCalibrated && cache?.hasDataAt(currentEpoch);
-        const karts = refs?.karts;
+        const hasGPS  = cache?.isCalibrated && cache?.hasDataAt(currentEpoch);
+        const karts   = refs?.karts;
 
         posSnapshot.forEach((data, driverNum) => {
           const kart = karts?.get(driverNum);
           if (!kart) return;
 
-          kart.position = data.position;
-          kart.gap = data.gap;
+          // ── Race state from API data ──
+          kart.position     = data.position;
+          kart.gap          = data.gap;
           kart.tireCompound = data.tireCompound;
 
-          // Pit stop detection
+          // Pit detection from pitStops timestamps
           let isPitting = false;
           for (const p of sess.pitStops) {
             if (p.driver_number === driverNum) {
               const ps = new Date(p.date).getTime();
-              const pe = ps + p.pit_duration * 1000;
-              if (currentEpoch >= ps && currentEpoch <= pe) { isPitting = true; break; }
+              if (currentEpoch >= ps && currentEpoch <= ps + p.pit_duration * 1000) {
+                isPitting = true; break;
+              }
             }
           }
           kart.isPitting = isPitting;
-          if (isPitting) { kart.gap = 'PIT'; data.gap = 'PIT'; }
+          if (isPitting) kart.gap = 'PIT';
 
-          // Try real GPS position
-          if (useRealPos) {
-            const realPos = cache.getDriverPosition(driverNum, currentEpoch);
-            if (realPos) {
-              const progress = getDriverTrackProgress(driverNum, t, data.position, sess);
-              let world = sm.toWorldCoords(realPos.x, realPos.y, kart._currentPos?.y ?? 0, progress);
+          // ── Position: prefer real GPS, fall back to lap-progress ──
+          let targetX = 0, targetY = 0, targetZ = 0, targetAngle = 0, targetPitch = 0;
+          let foundPos = false;
 
-              const tCur = cache.getDriverTangent(driverNum, currentEpoch);
-              const tFut = cache.getDriverTangent(driverNum, currentEpoch + 250);
+          if (hasGPS) {
+            const rawPos = cache.getDriverPosition(driverNum, currentEpoch);
+            if (rawPos) {
+              const world = sm.toWorldCoords(rawPos.x, rawPos.y);
+
+              // Heading: GPS tangent (current → 200ms ahead) for smooth steering
+              const t0 = cache.getDriverTangent(driverNum, currentEpoch);
+              const t1 = cache.getDriverTangent(driverNum, currentEpoch + 200);
               let angle = kart.currentAngle;
-              if (tCur && tFut) angle = Math.atan2((tCur.x + tFut.x) * 0.5, -(tCur.y + tFut.y) * 0.5);
-              else if (tCur) angle = Math.atan2(tCur.x, -tCur.y);
-
-              // Grid stagger blend for race start
-              const gw = Math.max(0, 1 - t / 5000);
-              if (gw > 0 && sess.gridSlots && data.position >= 1 && data.position <= 20) {
-                const slot = sess.gridSlots[data.position - 1];
-                const mc = sess.matchedCircuit;
-                const isPoleRight = !mc || mc.poleSide !== 'left';
-                const isRight = (data.position % 2 === 1) ? isPoleRight : !isPoleRight;
-                const rX = Math.cos(slot.angle), rZ = -Math.sin(slot.angle);
-                const gx = slot.x + rX * (isRight ? 4 : -4);
-                const gz = slot.z + rZ * (isRight ? 4 : -4);
-                world.x = world.x * (1 - gw) + gx * gw;
-                world.z = world.z * (1 - gw) + gz * gw;
+              if (t0 && t1) {
+                angle = Math.atan2((t0.x + t1.x) * 0.5, -(t0.y + t1.y) * 0.5);
+              } else if (t0) {
+                angle = Math.atan2(t0.x, -t0.y);
               }
 
-              const s = cache.getDriverSpeed(driverNum, currentEpoch);
-              kart.speed = kart.speed * 0.8 + s * 0.2;
-              kart.updatePosition(world.x, world.y, world.z, angle, world.pitch);
-              kart.progress = 0;
-              if (kart.hasStar && particles) particles.emitStarSparkle(world.x, 0, world.z);
-              return;
+              // Speed: from GPS magnitude (km/h)
+              const spd = cache.getDriverSpeed(driverNum, currentEpoch);
+              kart.speed = kart.speed * 0.85 + spd * 0.15; // smooth
+
+              targetX = world.x; targetY = world.y; targetZ = world.z; targetAngle = angle;
+              foundPos = true;
             }
           }
 
-          // Fallback: lap-timing interpolation
-          const progress = getDriverTrackProgress(driverNum, t, data.position, sess);
-          const pos3D = sm.getPositionOnTrack(progress);
-
-          const gw = Math.max(0, 1 - t / 5000);
-          if (gw > 0 && sess.gridSlots && data.position >= 1 && data.position <= 20) {
-            const slot = sess.gridSlots[data.position - 1];
-            const mc = sess.matchedCircuit;
-            const isPoleRight = !mc || mc.poleSide !== 'left';
-            const isRight = (data.position % 2 === 1) ? isPoleRight : !isPoleRight;
-            const rX = Math.cos(slot.angle), rZ = -Math.sin(slot.angle);
-            pos3D.x = pos3D.x * (1 - gw) + (slot.x + rX * (isRight ? 4 : -4)) * gw;
-            pos3D.z = pos3D.z * (1 - gw) + (slot.z + rZ * (isRight ? 4 : -4)) * gw;
-            pos3D.angle = pos3D.angle * (1 - gw) + slot.angle * gw;
+          if (!foundPos) {
+            const progress = getDriverTrackProgress(driverNum, t, data.position, sess);
+            const pos3D    = sm.getPositionOnTrack(progress);
+            targetX = pos3D.x; targetY = pos3D.y; targetZ = pos3D.z; targetAngle = pos3D.angle; targetPitch = pos3D.pitch;
+            kart.progress = progress;
+            const dp = Math.abs(progress - (kart._prevProgress || 0));
+            if (dp < 0.5 && dt > 0) {
+              kart.speed = (dp * sess.worldTrackLength) / ((dt * pb.speed) / 1000);
+            }
+            kart._prevProgress = progress;
           }
 
-          kart.updatePosition(pos3D.x, pos3D.y, pos3D.z, pos3D.angle, pos3D.pitch);
-          kart.progress = progress;
-
-          const dProg = Math.abs(progress - (kart._prevProgress || 0));
-          if (dProg < 0.5 && dt > 0) {
-            kart.speed = (dProg * 5) / ((dt * pb.speed) / 3600000);
+          // ── Grid Alignment ──
+          // Before race start (t < 0) and first few seconds, blend towards grid slots
+          const gridPos = sm.getGridPosition(data.position);
+          if (gridPos) {
+            let gridMix = 0;
+            if (t < 0) gridMix = 1.0;
+            else if (t < 5000) gridMix = 1.0 - (t / 5000); // Blend out over 5s
+            
+            if (gridMix > 0) {
+                targetX = targetX * (1 - gridMix) + gridPos.x * gridMix;
+                targetY = targetY * (1 - gridMix) + gridPos.y * gridMix;
+                targetZ = targetZ * (1 - gridMix) + gridPos.z * gridMix;
+                targetAngle = targetAngle * (1 - gridMix) + gridPos.angle * gridMix;
+                targetPitch = targetPitch * (1 - gridMix) + gridPos.pitch * gridMix;
+            }
           }
-          kart._prevProgress = progress;
 
-          if (kart.hasStar && particles) particles.emitStarSparkle(pos3D.x, pos3D.y, pos3D.z);
-          kart.hasMushroom = kart.speed > 315 || (kart.speed > 200 && kart.speed > (kart._prevSpeed || 0) * 1.05);
-          kart._prevSpeed = kart.speed;
+          kart.updatePosition(targetX, targetY, targetZ, targetAngle, targetPitch);
+          if (kart.hasStar && particles) particles.emitStarSparkle(targetX, targetY, targetZ);
+          kart.hasMushroom = kart.speed > 310;
         });
-
-        // Side-by-side avoidance
-        const activeKarts = refs?.karts ? [...refs.karts.values()].filter((k) => k.mesh.visible) : [];
-        for (const k of activeKarts) k.targetLateralOffset = 0;
-        for (let i = 0; i < activeKarts.length; i++) {
-          for (let j = i + 1; j < activeKarts.length; j++) {
-            const kA = activeKarts[i], kB = activeKarts[j];
-            const dx = kB._targetPos.x - kA._targetPos.x;
-            const dz = kB._targetPos.z - kA._targetPos.z;
-            const distSq = dx * dx + dz * dz;
-            if (distSq < 22 * 22 && distSq > 0.001) {
-              const dist = Math.sqrt(distSq);
-              const fw = { x: Math.sin(kA.currentAngle), z: Math.cos(kA.currentAngle) };
-              const rt = { x: Math.cos(kA.currentAngle), z: -Math.sin(kA.currentAngle) };
-              const dot = dx * rt.x + dz * rt.z;
-              const fwdDot = dx * fw.x + dz * fw.z;
-              const separationForce = Math.max(0, (22 - dist) / 22);
-              if (Math.abs(dot) < 16 && Math.abs(fwdDot) < 20) {
-                kA.targetLateralOffset -= separationForce * Math.sign(dot) * 2.0;
-                kB.targetLateralOffset += separationForce * Math.sign(dot) * 2.0;
-              }
-            }
-          }
-        }
-        for (const k of activeKarts) {
-          k._lateralOffset = (k._lateralOffset || 0) * 0.9 + (k.targetLateralOffset || 0) * 0.1;
-          if (Math.abs(k._lateralOffset) > 0.1) {
-            const rt = { x: Math.cos(k.currentAngle), z: -Math.sin(k.currentAngle) };
-            k.mesh.position.x += rt.x * k._lateralOffset;
-            k.mesh.position.z += rt.z * k._lateralOffset;
-          }
-        }
       }
+
 
       // Update all kart animations (lerp positions, wheel spin, lights, etc.)
       // Must happen BEFORE sm.render() — updatePosition() only sets targets,

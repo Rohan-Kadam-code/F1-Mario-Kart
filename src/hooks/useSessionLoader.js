@@ -47,14 +47,18 @@ export function useSessionLoader(sceneRefs) {
       let pitLanePoints2D = [];
       const matchedCircuit = findCircuit(session);
 
-      if (matchedCircuit) {
+      if (matchedCircuit && matchedCircuit.trackCoords && matchedCircuit.trackCoords.length > 0) {
         console.log(`✅ Matched circuit: ${matchedCircuit.name} (${matchedCircuit.id})`);
         trackPoints2D = matchedCircuit.trackCoords.map(([lng, lat]) => projectLatLng(lng, lat));
         if (matchedCircuit.pitLane && matchedCircuit.pitLane.length > 2) {
           pitLanePoints2D = matchedCircuit.pitLane.map(([lng, lat]) => projectLatLng(lng, lat));
         }
       } else {
-        console.log('No circuit match — falling back to telemetry');
+        if (matchedCircuit) {
+          console.log(`✅ Matched circuit metadata: ${matchedCircuit.name}, but falling back to telemetry for track shape`);
+        } else {
+          console.log('No circuit match — falling back to telemetry');
+        }
         const firstDriver = drivers[0];
         if (firstDriver) {
           try {

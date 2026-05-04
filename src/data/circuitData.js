@@ -409,6 +409,30 @@ const CIRCUITS = [
     pitEntryTrackFraction: 0.90,
     pitExitTrackFraction: 0.05,
   },
+
+  // ─────────────────────────────────────────────
+  //  MIAMI — Miami Grand Prix
+  // ─────────────────────────────────────────────
+  {
+    id: 'miami',
+    name: 'Miami International Autodrome',
+    location: 'Miami',
+    country: 'USA',
+    matchKeys: ['miami', 'florida', 'usa'],
+    lengthM: 5412,
+    trackWidthM: 14,
+    pitLaneWidthM: 12,
+    sectors: [0.33, 0.66],
+    drsZones: [
+      { start: 0.90, end: 0.05 },
+    ],
+    startFinishIndex: 10,
+    poleSide: 'right',
+    trackCoords: [],
+    pitLane: [],
+    pitEntryTrackFraction: 0.95,
+    pitExitTrackFraction: 0.05,
+  },
 ];
 
 /**

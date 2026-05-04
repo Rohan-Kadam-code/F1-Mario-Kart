@@ -628,9 +628,9 @@ export class Kart3D {
     const posX = this._currentPos.x + (rightX * this.lateralOffset);
     const posZ = this._currentPos.z + (rightZ * this.lateralOffset);
 
-    // Apply 0.25 offset so tires rest exactly on top of the asphalt layer (which is at +0.20)
-    const tireGroundOffset = 0.25; 
-    this.mesh.position.set(posX, this._currentPos.y + tireGroundOffset, posZ);
+    // Flat track — pin Y to a fixed height above the road surface
+    const FLAT_Y = 5.05;
+    this.mesh.position.set(posX, FLAT_Y, posZ);
 
     let ad = this.targetAngle - this.currentAngle;
     while (ad > Math.PI) ad -= Math.PI * 2;
@@ -640,9 +640,9 @@ export class Kart3D {
     let pd = this.targetPitch - this.currentPitch;
     this.currentPitch += pd * this._angleLerpFactor;
 
-    this.mesh.rotation.order = 'YXZ'; // Yaw first, then pitch
+    this.mesh.rotation.order = 'YXZ';
     this.mesh.rotation.y = this.currentAngle;
-    this.mesh.rotation.x = this.currentPitch; // Pitch the chassis
+    this.mesh.rotation.x = 0; // Flat — no pitch
 
     // ── Advanced Animations ──
 
@@ -656,7 +656,7 @@ export class Kart3D {
     // 2. Chassis Pitch & Lean (Orient the physical kart independently of the HUD sprites)
     const targetRoll = Math.max(-0.1, Math.min(0.1, -ad * 0.4)); 
     this.chassis.rotation.order = 'YXZ';
-    this.chassis.rotation.x = -this.currentPitch;
+    this.chassis.rotation.x = 0; // Flat — no pitch
     this.chassis.rotation.z += (targetRoll - this.chassis.rotation.z) * 0.1;
 
     // 3. High-Speed Vibration & Suspension
